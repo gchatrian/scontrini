@@ -8,10 +8,19 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.1
 python-multipart==0.0.9
 
-# Supabase (Task 2) - versioni aggiornate
+# Supabase (Task 2)
 supabase==2.9.0
 postgrest==0.17.2
 httpx==0.27.0
+
+# Google Cloud Vision (Task 3)
+google-cloud-vision==3.7.2
+
+# OpenAI (Task 3)
+openai==1.51.0
+
+# Image Processing (Task 4)
+pillow==10.3.0
 
 # Le seguenti dipendenze verranno aggiunte nei prossimi task:
 # Task 2 - Supabase
