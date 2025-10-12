@@ -1,0 +1,21 @@
+TASK LIST SVILUPPO - VERSIONE SINTETICA
+TASK 1: SETUP INIZIALE (Settimana 1)
+Crea repository monorepo scontrini/ con sottocartelle scontrini-backend/ e scontrini-frontend/. Inizializza backend Python (FastAPI + virtual env + requirements.txt) e frontend Next.js (TypeScript + Tailwind). Configura .gitignore, .env.example per entrambi. Verifica che entrambi i server partano correttamente in locale (backend su :8000, frontend su :3000).
+TASK 2: SUPABASE SETUP (Settimana 1)
+Crea progetto Supabase scontrini-dev. Esegui SQL per creare tutte le 8 tabelle (users, households, household_members, receipts, receipt_items, normalized_products, product_mappings, purchase_history) con relazioni e indici. Configura Storage bucket scontrini-receipts. Setup autenticazione email/password. Configura RLS policies base. Crea utente di test. Testa connessione da backend Python.
+TASK 3: API ESTERNE (Settimana 1)
+Crea progetto Google Cloud, abilita Vision API, scarica service account credentials JSON. Ottieni API key OpenAI. Configura tutti i secrets nei file .env. Scrivi 3 script di test per verificare connessione a: Google Vision (OCR su immagine test), OpenAI (chiamata GPT semplice), Supabase (query test). Verifica che tutto funzioni prima di procedere.
+TASK 4: OCR E PARSING (Settimana 2)
+Implementa ocr_service.py che riceve path immagine e ritorna testo estratto tramite Google Vision. Implementa parser_service.py con regex per estrarre da testo: store name, data/ora, lista prodotti (nome/quantità/prezzo), totale, metodo pagamento. Implementa supabase_service.py con funzioni CRUD. Crea endpoint POST /receipts/process che orchestra OCR → Parser → salva in DB. Testa con 5+ scontrini reali di negozi diversi.
+TASK 5: AGENTE NORMALIZZATORE (Settimana 3)
+Implementa agent_service.py come wrapper OpenAI con GPT-4o-mini. Scrivi system prompt per normalizzazione prodotti. Implementa function tools: search_product_online, find_existing_product, create_normalized_product. Crea product_normalizer.py che orchestra chiamate agent + tools con function calling. Integra nell'endpoint /receipts/process per normalizzare ogni prodotto e salvare in normalized_products, product_mappings, purchase_history. Testa con prodotti comuni, ambigui e sconosciuti.
+TASK 6: AUTENTICAZIONE FRONTEND (Settimana 4)
+Integra Supabase client nel frontend. Crea pagine login e signup con form validation. Implementa gestione sessione utente e redirect. Crea layout protetto per dashboard. Implementa logout. Testa flusso completo: registrazione → conferma email → login → accesso dashboard.
+TASK 7: UPLOAD SCONTRINO (Settimana 4)
+Crea pagina /upload con componente per scattare foto o selezionare file. Implementa upload a Supabase Storage. Chiama backend POST /receipts/process con URL immagine. Mostra loading state durante processing. Visualizza risultati: scontrino parsato + prodotti riconosciuti. Gestisci errori (OCR fallito, parsing incompleto). Permetti correzione manuale dati prima di conferma finale.
+TASK 8: STORICO SCONTRINI (Settimana 4)
+Crea pagina /receipts con lista scontrini dell'household. Implementa filtri per: data, negozio, range prezzo. Mostra card per ogni scontrino (thumbnail, negozio, data, totale). Click su card → pagina dettaglio con lista prodotti completa. Implementa paginazione per gestire molti scontrini. Aggiungi possibilità di eliminare scontrino.
+TASK 9: GESTIONE HOUSEHOLD (Settimana 4-5)
+Crea funzionalità per creare nuovo household. Implementa dropdown per selezionare household attivo (se utente in più gruppi). Crea pagina per invitare membri via email. Implementa accettazione inviti. Visualizza lista membri household con ruoli. Testa con 2 utenti che condividono stesso household e vedono stessi scontrini.
+TASK 10: TESTING E DEPLOY (Settimana 5)
+Testa flusso end-to-end completo con utenti reali. Raccogli feedback su accuracy OCR e normalizzazione. Aggiungi logging strutturato e error handling robusto. Monitora costi API (Google Vision, OpenAI). Ottimizza caching per prodotti già normalizzati. Scrivi documentazione: README con setup, API docs, user guide. Prepara per deploy: containerizza backend (Docker), deploy frontend su Vercel, backend su Render/Railway. Setup monitoring e alerts.

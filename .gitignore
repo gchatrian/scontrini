@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+*.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+venv/
+env/
+.Python
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# Secrets
+google-credentials.json
+*.key
+*.pem
+
+# Logs
+*.log
