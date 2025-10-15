@@ -57,8 +57,11 @@ async def shutdown_event():
     """Eseguito alla chiusura del server"""
     print(f"👋 {settings.PROJECT_NAME} API shutdown")
 
-# Nel futuro aggiungeremo qui i router per gli endpoint:
-# from app.api.routes import receipts, products, households
-# app.include_router(receipts.router, prefix="/api/v1/receipts", tags=["receipts"])
-# app.include_router(products.router, prefix="/api/v1/products", tags=["products"])
-# app.include_router(households.router, prefix="/api/v1/households", tags=["households"])
+# Include routers API
+from app.api.routes import receipts
+
+app.include_router(
+    receipts.router, 
+    prefix="/api/v1/receipts", 
+    tags=["receipts"]
+)

@@ -1,0 +1,255 @@
+"""
+Supabase Service - Gestisce operazioni database
+"""
+from typing import Dict, List, Optional
+from supabase import create_client, Client
+from app.config import settings
+from datetime import date, time
+
+
+class SupabaseService:
+    """Servizio per operazioni Supabase"""
+    
+    def __init__(self):
+        """Inizializza client Supabase"""
+        self.client: Client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_ROLE_KEY  # Usa service_role per bypass RLS
+        )
+    
+    # ===================================
+    # RECEIPTS
+    # ===================================
+    
+    def create_receipt(
+        self,
+        household_id: str,
+        uploaded_by: str,
+        image_url: str,
+        store_name: Optional[str] = None,
+        store_address: Optional[str] = None,
+        receipt_date: Optional[date] = None,
+        receipt_time: Optional[time] = None,
+        total_amount: Optional[float] = None,
+        payment_method: Optional[str] = None,
+        discount_amount: Optional[float] = None,
+        raw_ocr_text: Optional[str] = None,
+        ocr_confidence: Optional[float] = None,
+        processing_status: str = "pending"
+    ) -> Dict:
+        """Crea nuovo scontrino"""
+        
+        data = {
+            "household_id": household_id,
+            "uploaded_by": uploaded_by,
+            "image_url": image_url,
+            "store_name": store_name,
+            "store_address": store_address,
+            "receipt_date": receipt_date.isoformat() if receipt_date else None,
+            "receipt_time": receipt_time.isoformat() if receipt_time else None,
+            "total_amount": total_amount,
+            "payment_method": payment_method,
+            "discount_amount": discount_amount,
+            "raw_ocr_text": raw_ocr_text,
+            "ocr_confidence": ocr_confidence,
+            "processing_status": processing_status
+        }
+        
+        response = self.client.table("receipts").insert(data).execute()
+        return response.data[0] if response.data else None
+    
+    def update_receipt_status(
+        self,
+        receipt_id: str,
+        status: str
+    ) -> Dict:
+        """Aggiorna stato processing scontrino"""
+        
+        response = self.client.table("receipts")\
+            .update({"processing_status": status})\
+            .eq("id", receipt_id)\
+            .execute()
+        
+        return response.data[0] if response.data else None
+    
+    def get_receipt(self, receipt_id: str) -> Optional[Dict]:
+        """Ottieni scontrino per ID"""
+        
+        response = self.client.table("receipts")\
+            .select("*")\
+            .eq("id", receipt_id)\
+            .execute()
+        
+        return response.data[0] if response.data else None
+    
+    def get_receipts_by_household(
+        self,
+        household_id: str,
+        limit: int = 50
+    ) -> List[Dict]:
+        """Ottieni scontrini di un household"""
+        
+        response = self.client.table("receipts")\
+            .select("*")\
+            .eq("household_id", household_id)\
+            .order("receipt_date", desc=True)\
+            .limit(limit)\
+            .execute()
+        
+        return response.data
+    
+    # ===================================
+    # RECEIPT ITEMS
+    # ===================================
+    
+    def create_receipt_items(
+        self,
+        receipt_id: str,
+        items: List[Dict]
+    ) -> List[Dict]:
+        """
+        Crea items per uno scontrino
+        
+        Args:
+            receipt_id: ID scontrino
+            items: Lista di dict con: raw_product_name, quantity, unit_price, total_price, line_number
+        """
+        
+        # Aggiungi receipt_id a ogni item
+        items_data = []
+        for idx, item in enumerate(items):
+            items_data.append({
+                "receipt_id": receipt_id,
+                "raw_product_name": item["raw_product_name"],
+                "quantity": item.get("quantity", 1),
+                "unit_price": item.get("unit_price"),
+                "total_price": item["total_price"],
+                "line_number": item.get("line_number", idx + 1)
+            })
+        
+        response = self.client.table("receipt_items").insert(items_data).execute()
+        return response.data
+    
+    def get_receipt_items(self, receipt_id: str) -> List[Dict]:
+        """Ottieni items di uno scontrino"""
+        
+        response = self.client.table("receipt_items")\
+            .select("*")\
+            .eq("receipt_id", receipt_id)\
+            .order("line_number")\
+            .execute()
+        
+        return response.data
+    
+    # ===================================
+    # HOUSEHOLDS
+    # ===================================
+    
+    def get_household(self, household_id: str) -> Optional[Dict]:
+        """Ottieni household per ID"""
+        
+        response = self.client.table("households")\
+            .select("*")\
+            .eq("id", household_id)\
+            .execute()
+        
+        return response.data[0] if response.data else None
+    
+    def get_user_households(self, user_id: str) -> List[Dict]:
+        """Ottieni tutti gli households di un utente"""
+        
+        response = self.client.table("household_members")\
+            .select("households(*)")\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        return [item["households"] for item in response.data]
+    
+    def create_household(
+        self,
+        name: str,
+        owner_id: str
+    ) -> Dict:
+        """Crea nuovo household e aggiungi owner"""
+        
+        # Crea household
+        household_response = self.client.table("households")\
+            .insert({"name": name})\
+            .execute()
+        
+        household = household_response.data[0]
+        
+        # Aggiungi owner come membro
+        self.client.table("household_members").insert({
+            "household_id": household["id"],
+            "user_id": owner_id,
+            "role": "owner"
+        }).execute()
+        
+        return household
+    
+    # ===================================
+    # NORMALIZED PRODUCTS (per Task 5)
+    # ===================================
+    
+    def get_normalized_product(self, product_id: str) -> Optional[Dict]:
+        """Ottieni prodotto normalizzato"""
+        
+        response = self.client.table("normalized_products")\
+            .select("*")\
+            .eq("id", product_id)\
+            .execute()
+        
+        return response.data[0] if response.data else None
+    
+    def search_normalized_products(
+        self,
+        search_term: str,
+        limit: int = 10
+    ) -> List[Dict]:
+        """Cerca prodotti normalizzati"""
+        
+        response = self.client.table("normalized_products")\
+            .select("*")\
+            .ilike("canonical_name", f"%{search_term}%")\
+            .limit(limit)\
+            .execute()
+        
+        return response.data
+    
+    # ===================================
+    # STORAGE
+    # ===================================
+    
+    def upload_receipt_image(
+        self,
+        file_path: str,
+        file_content: bytes,
+        content_type: str = "image/jpeg"
+    ) -> str:
+        """
+        Upload immagine scontrino su Supabase Storage
+        
+        Args:
+            file_path: Path nel bucket (es: "user_id/receipt_id.jpg")
+            file_content: Contenuto file come bytes
+            content_type: MIME type
+            
+        Returns:
+            URL pubblico dell'immagine
+        """
+        
+        # Upload su storage
+        self.client.storage.from_("scontrini-receipts").upload(
+            file_path,
+            file_content,
+            {"content-type": content_type}
+        )
+        
+        # Genera URL
+        url = self.client.storage.from_("scontrini-receipts").get_public_url(file_path)
+        return url
+
+
+# Istanza globale del servizio
+supabase_service = SupabaseService()
