@@ -26,6 +26,7 @@ class SupabaseService:
         household_id: str,
         uploaded_by: str,
         image_url: str,
+        store_id: Optional[str] = None,
         store_name: Optional[str] = None,
         store_address: Optional[str] = None,
         receipt_date: Optional[date] = None,
@@ -43,6 +44,7 @@ class SupabaseService:
             "household_id": household_id,
             "uploaded_by": uploaded_by,
             "image_url": image_url,
+            "store_id": store_id,
             "store_name": store_name,
             "store_address": store_address,
             "receipt_date": receipt_date.isoformat() if receipt_date else None,
@@ -212,6 +214,54 @@ class SupabaseService:
         response = self.client.table("normalized_products")\
             .select("*")\
             .ilike("canonical_name", f"%{search_term}%")\
+            .limit(limit)\
+            .execute()
+        
+        return response.data
+    
+    # ===================================
+    # STORES
+    # ===================================
+    
+    def get_store(self, store_id: str) -> Optional[Dict]:
+        """Ottieni store per ID"""
+        
+        response = self.client.table("stores")\
+            .select("*")\
+            .eq("id", store_id)\
+            .execute()
+        
+        return response.data[0] if response.data else None
+    
+    def get_stores_by_household(self, household_id: str) -> List[Dict]:
+        """Ottieni tutti gli stores usati da un household"""
+        
+        # Stores da receipts del household
+        response = self.client.table("receipts")\
+            .select("stores(*)")\
+            .eq("household_id", household_id)\
+            .execute()
+        
+        # Estrai stores unici
+        stores_map = {}
+        for item in response.data:
+            if item.get("stores"):
+                store = item["stores"]
+                stores_map[store["id"]] = store
+        
+        return list(stores_map.values())
+    
+    def search_stores(
+        self,
+        query: str,
+        limit: int = 10
+    ) -> List[Dict]:
+        """Cerca stores per nome"""
+        
+        response = self.client.table("stores")\
+            .select("*")\
+            .ilike("name", f"%{query}%")\
+            .eq("is_mock", False)\
             .limit(limit)\
             .execute()
         

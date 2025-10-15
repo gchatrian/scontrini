@@ -78,7 +78,13 @@ ISTRUZIONI:
 OUTPUT FORMATO JSON:
 {
   "store_name": "Nome supermercato (es. Esselunga, Coop, Bennet)",
-  "store_address": "Indirizzo completo se presente",
+  "company_name": "Ragione sociale completa se presente (es. 'Bennet S.p.A.')",
+  "vat_number": "Partita IVA se presente (solo numeri, es. '07071700152')",
+  "address_full": "Indirizzo completo come appare sullo scontrino",
+  "address_street": "Via/Viale/Piazza con numero civico",
+  "address_city": "Città",
+  "address_province": "Provincia (sigla 2 lettere, es. 'MI', 'CO', 'RM')",
+  "address_postal_code": "CAP se presente",
   "receipt_date": "Data in formato YYYY-MM-DD",
   "receipt_time": "Ora in formato HH:MM",
   "total_amount": 123.45,
@@ -98,11 +104,14 @@ REGOLE IMPORTANTI:
 - Tutti i prezzi devono essere numeri float (es. 12.50, non "12,50")
 - Le date devono essere YYYY-MM-DD
 - Gli orari devono essere HH:MM
+- P.IVA: estrai solo i numeri (es. "P.IVA: 12345678901" → "12345678901")
+- Provincia: solo sigla (es. "Milano (MI)" → "MI")
 - quantity, unit_price, total_price devono essere numeri
 - Se non trovi un dato, usa null (non stringa vuota)
 - Per i prodotti: estrai SOLO righe con nome prodotto + prezzo
 - Ignora sconti, subtotali, righe promozionali nei prodotti
-- raw_product_name deve contenere il nome come appare sullo scontrino"""
+- raw_product_name deve contenere il nome come appare sullo scontrino
+- Separa address_street (via + numero) da address_city"""
     
     def _create_user_prompt(self, ocr_text: str) -> str:
         """Crea user prompt con testo OCR"""
