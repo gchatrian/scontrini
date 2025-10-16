@@ -143,13 +143,22 @@ async def process_receipt(request: ProcessReceiptRequest):
                     
                     # Se normalizzazione riuscita, crea entry in purchase_history
                     if norm_result["success"] and norm_result.get("normalized_product_id"):
+                        # Usa receipt_date se presente, altrimenti fallback a now UTC
+                        from datetime import datetime, timezone
+                        purchase_date_value = parsing_result.get("receipt_date")
+                        # Assicura formato DATE (YYYY-MM-DD), mai datetime
+                        if purchase_date_value is not None:
+                            purchase_date_str = purchase_date_value.isoformat()
+                        else:
+                            purchase_date_str = datetime.now(timezone.utc).date().isoformat()
+
                         supabase_service.client.table("purchase_history").insert({
                             "household_id": request.household_id,
                             "receipt_id": receipt_id,
                             "receipt_item_id": item_data["id"],
                             "normalized_product_id": norm_result["normalized_product_id"],
                             "store_id": store_id,  # Aggiungi store_id
-                            "purchase_date": parsing_result.get("receipt_date").isoformat() if parsing_result.get("receipt_date") else None,
+                            "purchase_date": purchase_date_str,
                             "store_name": parsing_result.get("store_name"),
                             "quantity": item_data.get("quantity", 1),
                             "unit_price": item_data.get("unit_price"),

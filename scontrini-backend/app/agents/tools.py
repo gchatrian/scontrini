@@ -9,7 +9,60 @@ from typing import Dict, List, Optional
 from app.services.supabase_service import supabase_service
 
 
-# (Rimosso) TOOL: FIND EXISTING PRODUCT — policy aggiornata: se manca mapping, creare sempre un nuovo prodotto
+# ===================================
+# TOOL: FIND EXISTING PRODUCT
+# ===================================
+
+def find_existing_product(product_name: str) -> Dict:
+    """
+    Cerca prodotto normalizzato esistente nel database
+    
+    Args:
+        product_name: Nome prodotto da cercare
+        
+    Returns:
+        Dict con prodotto trovato o None
+    """
+    try:
+        # Cerca per nome esatto
+        results = supabase_service.client.table("normalized_products")\
+            .select("*")\
+            .eq("canonical_name", product_name)\
+            .execute()
+        
+        if results.data:
+            return {
+                "success": True,
+                "found": True,
+                "product": results.data[0]
+            }
+        
+        # Cerca per similarità (fuzzy search)
+        results = supabase_service.search_normalized_products(
+            product_name, 
+            limit=5
+        )
+        
+        if results:
+            return {
+                "success": True,
+                "found": True,
+                "product": results[0],
+                "note": "Found by similarity"
+            }
+        
+        return {
+            "success": True,
+            "found": False,
+            "product": None
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Database error: {str(e)}",
+            "found": False
+        }
 
 
 # ===================================
@@ -41,6 +94,23 @@ def create_normalized_product(
         Dict con prodotto creato
     """
     try:
+        # Guardia anti-duplicati lato server: prima di creare, tenta riuso
+        try:
+            existing = supabase_service.client.table("normalized_products")\
+                .select("*")\
+                .eq("canonical_name", canonical_name)\
+                .execute()
+            if existing.data:
+                return {"success": True, "product": existing.data[0], "note": "Reused existing (exact match)"}
+        except Exception:
+            pass
+        # second best: similarità
+        try:
+            similar = supabase_service.search_normalized_products(canonical_name, limit=1)
+            if similar:
+                return {"success": True, "product": similar[0], "note": "Reused existing (similar)"}
+        except Exception:
+            pass
         data = {
             "canonical_name": canonical_name,
             "brand": brand,
@@ -81,7 +151,8 @@ def create_product_mapping(
     raw_name: str,
     normalized_product_id: str,
     store_name: Optional[str] = None,
-    confidence_score: float = 0.9
+    confidence_score: float = 0.9,
+    requires_manual_review: Optional[bool] = None
 ) -> Dict:
     """
     Crea mapping tra nome grezzo e prodotto normalizzato
@@ -103,6 +174,8 @@ def create_product_mapping(
             "confidence_score": confidence_score,
             "verified_by_user": False
         }
+        if requires_manual_review is not None:
+            data["requires_manual_review"] = requires_manual_review
         
         response = supabase_service.client.table("product_mappings")\
             .insert(data)\
@@ -138,6 +211,23 @@ def create_product_mapping(
 # ===================================
 
 TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "find_existing_product",
+            "description": "Cerca se un prodotto normalizzato esiste già nel database. Usa sempre questo PRIMA di creare un nuovo prodotto.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_name": {
+                        "type": "string",
+                        "description": "Nome prodotto normalizzato da cercare"
+                    }
+                },
+                "required": ["product_name"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -199,6 +289,7 @@ def execute_function(function_name: str, arguments: Dict) -> Dict:
         Risultato esecuzione funzione
     """
     functions = {
+        "find_existing_product": find_existing_product,
         "create_normalized_product": create_normalized_product
     }
     

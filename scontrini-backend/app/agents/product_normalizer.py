@@ -6,7 +6,7 @@ import json
 from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
 from app.config import settings
-from app.agents.prompts import SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT
+from app.agents.prompts import SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT, PRODUCT_IDENTIFICATION_PROMPT, PRODUCT_VALIDATION_PROMPT
 from app.agents.tools import TOOL_DEFINITIONS, execute_function, create_product_mapping
 from app.services.supabase_service import supabase_service
 
@@ -39,6 +39,7 @@ class ProductNormalizerAgent:
             Dict con risultati normalizzazione
         """
         try:
+            print(f"🔎 Normalization start | raw='{raw_product_name}' | store='{store_name}' | price={price}")
             # Controlla se esiste già mapping per questo raw_name
             existing_mapping = self._check_existing_mapping(
                 raw_product_name, 
@@ -46,6 +47,7 @@ class ProductNormalizerAgent:
             )
             
             if existing_mapping:
+                print(f"🟢 Cache hit | canonical='{existing_mapping.get('canonical_name')}' | id={existing_mapping['normalized_product_id']}")
                 return {
                     "success": True,
                     "normalized_product_id": existing_mapping["normalized_product_id"],
@@ -55,7 +57,8 @@ class ProductNormalizerAgent:
                     "confidence": 1.0
                 }
             
-            # Single-step: Identificazione e normalizzazione
+            print("🟡 Cache miss → invoking LLM: identification → validation…")
+            # Step 1: Identificazione (senza confidenza/review)
             identification_result = self._identify_product(
                 raw_product_name,
                 store_name,
@@ -63,12 +66,39 @@ class ProductNormalizerAgent:
             )
             
             if not identification_result["success"]:
+                print(f"🔴 LLM normalization failed: {identification_result.get('error')}")
                 return {
                     "success": False,
                     "error": f"Step 2 failed: {identification_result.get('error')}"
                 }
             
-            final_confidence = identification_result.get("confidence", 0.5)
+            # Step 2: Validazione (confidence + pending_review)
+            validation_outcome = self._validate_identification(
+                raw_name=raw_product_name,
+                identified={
+                    "canonical_name": identification_result.get("canonical_name"),
+                    "brand": identification_result.get("brand"),
+                    "category": identification_result.get("category"),
+                    "subcategory": identification_result.get("subcategory"),
+                    "size": identification_result.get("size"),
+                    "unit_type": identification_result.get("unit_type"),
+                    "notes": identification_result.get("identification_notes")
+                }
+            )
+            final_confidence = float(validation_outcome.get("confidence", 0.5))
+            pending_review = bool(validation_outcome.get("pending_review"))
+            print(
+                "✅ LLM result | canonical='{cn}' | brand='{br}' | cat='{cat}' | size='{sz}' | conf={cf:.2f} | pending_review={pr}".format(
+                    cn=identification_result.get("canonical_name"),
+                    br=identification_result.get("brand"),
+                    cat=identification_result.get("category"),
+                    sz=identification_result.get("size"),
+                    cf=final_confidence,
+                    pr=pending_review
+                )
+            )
+            # Log esplicito della confidence per audit
+            print(f"📊 Product normalization confidence: {final_confidence:.2f}")
             
             result = {
                 "success": True,
@@ -81,7 +111,8 @@ class ProductNormalizerAgent:
                 "subcategory": identification_result.get("subcategory"),
                 "size": identification_result.get("size"),
                 "unit_type": identification_result.get("unit_type"),
-                "identification_notes": identification_result.get("identification_notes")
+                "identification_notes": identification_result.get("identification_notes"),
+                "pending_review": pending_review
             }
             
             # Crea mapping raw_name → normalized_product
@@ -89,13 +120,35 @@ class ProductNormalizerAgent:
                 raw_name=raw_product_name,
                 normalized_product_id=result["normalized_product_id"],
                 store_name=store_name,
-                confidence_score=final_confidence
+                confidence_score=final_confidence,
+                requires_manual_review=pending_review
             )
             
             result["mapping_id"] = mapping.get("mapping", {}).get("id")
+            if mapping.get("success"):
+                print(f"🧩 Mapping created | id={result.get('mapping_id')} | requires_manual_review={pending_review}")
+            else:
+                print(f"⚠️ Mapping not created: {mapping.get('error')}")
+
+            # Aggiorna anche lo status del prodotto normalizzato per far emergere nella view
+            try:
+                if pending_review:
+                    supabase_service.client.table("normalized_products")\
+                        .update({"verification_status": "pending_review"})\
+                        .eq("id", result["normalized_product_id"])\
+                        .execute()
+                else:
+                    # Mantieni auto_verified se non pending
+                    supabase_service.client.table("normalized_products")\
+                        .update({"verification_status": "auto_verified"})\
+                        .eq("id", result["normalized_product_id"])\
+                        .execute()
+            except Exception as e:
+                print(f"⚠️ Failed to update normalized_products.verification_status: {e}")
             return result
             
         except Exception as e:
+            print(f"💥 Normalization error: {str(e)}")
             return {
                 "success": False,
                 "error": f"Normalization error: {str(e)}"
@@ -143,7 +196,7 @@ Istruzioni:
 - Interpreta abbreviazioni/nomi compressi presenti nel RAW.
 - Estrai BRAND (se presente), PRODOTTO, FORMATO.
 - Se uno tra BRAND o PRODOTTO è incerto, parti da quello più certo per vincolare la ricerca dell'altro (es. se PRODOTTO=Acqua Frizzante, limita i brand plausibili).
-- Non esiste un mapping per questo RAW: crea SEMPRE un nuovo prodotto usando create_normalized_product.
+- Non esiste un mapping per questo RAW: prova PRIMA a riusare un prodotto esistente (find_existing_product) e SOLO se non trovato crea un nuovo prodotto (create_normalized_product).
 - Rispondi SOLO con JSON finale (niente testo extra)."""
         
         return message
@@ -156,7 +209,7 @@ Istruzioni:
             Dict con risultato identificazione
         """
         messages = [
-            {"role": "system", "content": SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT},
+            {"role": "system", "content": PRODUCT_IDENTIFICATION_PROMPT},
             {"role": "user", "content": user_message}
         ]
         
@@ -164,6 +217,7 @@ Istruzioni:
         
         while iteration < self.max_iterations:
             iteration += 1
+            print(f"🔁 LLM iteration #{iteration}")
             
             # Chiama OpenAI con function tools
             response = self.client.chat.completions.create(
@@ -198,13 +252,11 @@ Istruzioni:
                 for tool_call in message.tool_calls:
                     function_name = tool_call.function.name
                     arguments = json.loads(tool_call.function.arguments)
-                    
-                    print(f"  🔧 Step 2 - Calling: {function_name}")
+                    print(f"  🔧 Tool call: {function_name} | args={arguments}")
                     
                     # Esegui funzione
                     function_result = execute_function(function_name, arguments)
-                    
-                    print(f"  ✅ Result: {function_result.get('success', False)}")
+                    print(f"  ✅ Tool result: success={function_result.get('success', False)}")
                     
                     # Aggiungi risultato ai messaggi
                     messages.append({
@@ -229,16 +281,19 @@ Istruzioni:
                             content = content[4:]
                     
                     result = json.loads(content)
+                    print("🏁 LLM completed with final JSON response")
                     result["success"] = True
                     return result
                     
                 except json.JSONDecodeError:
+                    print("⚠️ Failed to parse LLM response as JSON")
                     return {
                         "success": False,
                         "error": f"Failed to parse response: {message.content}"
                     }
             
             # Nessun content e nessun tool call - errore
+            print("⚠️ LLM returned neither tool_calls nor content")
             return {
                 "success": False,
                 "error": "Agent did not return valid response"
@@ -249,6 +304,27 @@ Istruzioni:
             "success": False,
             "error": f"Max iterations ({self.max_iterations}) reached"
         }
+
+    def _validate_identification(self, raw_name: str, identified: Dict) -> Dict:
+        """Seconda chiamata LLM: valida il risultato e produce confidence/pending_review"""
+        messages = [
+            {"role": "system", "content": PRODUCT_VALIDATION_PROMPT},
+            {"role": "user", "content": json.dumps({
+                "raw": raw_name,
+                "identified": identified
+            })}
+        ]
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            content = response.choices[0].message.content.strip()
+            return json.loads(content)
+        except Exception as e:
+            return {"confidence": 0.5, "pending_review": True, "validation_notes": f"validation_error: {str(e)}"}
     
     def _check_existing_mapping(
         self, 
