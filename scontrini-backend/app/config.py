@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # OpenAI (Task 3)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_TEMPERATURE: float = 0.7
     
     # Web Search (Optional - Task 5)
     SERPER_API_KEY: str = ""

@@ -1,134 +1,16 @@
 """
 Function Tools per Product Normalizer Agent
 L'agente OpenAI può chiamare queste funzioni per:
-- Cercare prodotti online
 - Trovare prodotti normalizzati esistenti
 - Creare nuovi prodotti normalizzati
 """
-import requests
 import json
 from typing import Dict, List, Optional
 from app.services.supabase_service import supabase_service
-from app.config import settings
 
 
 # ===================================
-# TOOL 1: WEB SEARCH
-# ===================================
-
-def search_product_online(query: str, max_results: int = 3) -> Dict:
-    """
-    Cerca informazioni su un prodotto online
-    
-    Args:
-        query: Nome prodotto da cercare
-        max_results: Numero massimo risultati
-        
-    Returns:
-        Dict con risultati search
-    """
-    try:
-        # Opzione A: Usa Serper API (se configurata)
-        if settings.SERPER_API_KEY:
-            return _search_with_serper(query, max_results)
-        
-        # Opzione B: Usa DuckDuckGo (free, no API key)
-        return _search_with_duckduckgo(query, max_results)
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Search error: {str(e)}",
-            "results": []
-        }
-
-
-def _search_with_serper(query: str, max_results: int) -> Dict:
-    """Cerca con Serper API (richiede API key)"""
-    url = "https://google.serper.dev/search"
-    
-    payload = json.dumps({
-        "q": query,
-        "num": max_results
-    })
-    
-    headers = {
-        'X-API-KEY': settings.SERPER_API_KEY,
-        'Content-Type': 'application/json'
-    }
-    
-    response = requests.post(url, headers=headers, data=payload, timeout=5)
-    data = response.json()
-    
-    results = []
-    for item in data.get("organic", [])[:max_results]:
-        results.append({
-            "title": item.get("title"),
-            "snippet": item.get("snippet"),
-            "link": item.get("link")
-        })
-    
-    return {
-        "success": True,
-        "query": query,
-        "results": results
-    }
-
-
-def _search_with_duckduckgo(query: str, max_results: int) -> Dict:
-    """
-    Cerca con DuckDuckGo (free, no API key)
-    Usa l'API istantanea di DuckDuckGo
-    """
-    try:
-        url = "https://api.duckduckgo.com/"
-        params = {
-            "q": query,
-            "format": "json",
-            "no_html": 1,
-            "skip_disambig": 1
-        }
-        
-        response = requests.get(url, params=params, timeout=5)
-        data = response.json()
-        
-        results = []
-        
-        # Abstract (descrizione principale)
-        if data.get("Abstract"):
-            results.append({
-                "title": data.get("Heading", query),
-                "snippet": data.get("Abstract"),
-                "link": data.get("AbstractURL", "")
-            })
-        
-        # Related topics
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append({
-                    "title": topic.get("Text", "")[:100],
-                    "snippet": topic.get("Text", ""),
-                    "link": topic.get("FirstURL", "")
-                })
-        
-        return {
-            "success": True,
-            "query": query,
-            "results": results[:max_results]
-        }
-        
-    except Exception as e:
-        # Fallback: crea risultato "mock" per continuare
-        return {
-            "success": False,
-            "query": query,
-            "results": [],
-            "note": "Search unavailable, proceeding with basic info"
-        }
-
-
-# ===================================
-# TOOL 2: FIND EXISTING PRODUCT
+# TOOL 1: FIND EXISTING PRODUCT
 # ===================================
 
 def find_existing_product(product_name: str) -> Dict:
@@ -184,7 +66,7 @@ def find_existing_product(product_name: str) -> Dict:
 
 
 # ===================================
-# TOOL 3: CREATE NORMALIZED PRODUCT
+# TOOL 2: CREATE NORMALIZED PRODUCT
 # ===================================
 
 def create_normalized_product(
@@ -201,12 +83,12 @@ def create_normalized_product(
     
     Args:
         canonical_name: Nome canonico normalizzato
-        brand: Brand (es. "Coca-Cola")
-        category: Categoria (es. "Bevande > Bibite Gassate")
+        brand: Brand del prodotto
+        category: Categoria principale
         subcategory: Sottocategoria
-        size: Dimensione (es. "1.5L")
-        unit_type: Tipo unità (es. "litri", "kg")
-        tags: Tag (es. ["bibita", "gassata"])
+        size: Dimensione/quantità
+        unit_type: Tipo unità di misura
+        tags: Tag descrittivi
         
     Returns:
         Dict con prodotto creato
@@ -245,7 +127,7 @@ def create_normalized_product(
 
 
 # ===================================
-# TOOL 4: CREATE PRODUCT MAPPING
+# TOOL 3: CREATE PRODUCT MAPPING
 # ===================================
 
 def create_product_mapping(
@@ -308,30 +190,7 @@ def create_product_mapping(
 # TOOL DEFINITIONS per OpenAI
 # ===================================
 
-# Queste sono le definizioni che OpenAI usa per capire come chiamare le funzioni
 TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_product_online",
-            "description": "Cerca informazioni su un prodotto online quando non lo riconosci. Usa questo per prodotti sconosciuti o per verificare informazioni.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Nome prodotto da cercare (es. 'Coca-Cola caratteristiche', 'Barilla pasta ingredienti')"
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Numero massimo risultati (default: 3)",
-                        "default": 3
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    },
     {
         "type": "function",
         "function": {
@@ -342,7 +201,7 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "product_name": {
                         "type": "string",
-                        "description": "Nome prodotto normalizzato da cercare (es. 'Coca-Cola Regular 1.5L')"
+                        "description": "Nome prodotto normalizzato da cercare"
                     }
                 },
                 "required": ["product_name"]
@@ -359,15 +218,15 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "canonical_name": {
                         "type": "string",
-                        "description": "Nome canonico normalizzato (es. 'Coca-Cola Regular 1.5L')"
+                        "description": "Nome canonico normalizzato del prodotto"
                     },
                     "brand": {
                         "type": "string",
-                        "description": "Brand del prodotto (es. 'Coca-Cola', 'Barilla')"
+                        "description": "Marca/brand del prodotto"
                     },
                     "category": {
                         "type": "string",
-                        "description": "Categoria principale (es. 'Bevande > Bibite Gassate', 'Alimentari > Pasta')"
+                        "description": "Categoria principale usando formato gerarchico"
                     },
                     "subcategory": {
                         "type": "string",
@@ -375,16 +234,16 @@ TOOL_DEFINITIONS = [
                     },
                     "size": {
                         "type": "string",
-                        "description": "Dimensione/quantità (es. '1.5L', '500g', '1kg')"
+                        "description": "Dimensione/quantità del prodotto"
                     },
                     "unit_type": {
                         "type": "string",
-                        "description": "Tipo unità (es. 'litri', 'grammi', 'chilogrammi', 'pezzi')"
+                        "description": "Tipo di unità di misura"
                     },
                     "tags": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Tag descrittivi (es. ['bibita', 'gassata', 'zuccherata'])"
+                        "description": "Tag descrittivi del prodotto"
                     }
                 },
                 "required": ["canonical_name", "category"]
@@ -410,7 +269,6 @@ def execute_function(function_name: str, arguments: Dict) -> Dict:
         Risultato esecuzione funzione
     """
     functions = {
-        "search_product_online": search_product_online,
         "find_existing_product": find_existing_product,
         "create_normalized_product": create_normalized_product
     }
