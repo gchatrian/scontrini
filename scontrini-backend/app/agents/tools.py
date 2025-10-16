@@ -9,64 +9,11 @@ from typing import Dict, List, Optional
 from app.services.supabase_service import supabase_service
 
 
-# ===================================
-# TOOL 1: FIND EXISTING PRODUCT
-# ===================================
-
-def find_existing_product(product_name: str) -> Dict:
-    """
-    Cerca prodotto normalizzato esistente nel database
-    
-    Args:
-        product_name: Nome prodotto da cercare
-        
-    Returns:
-        Dict con prodotto trovato o None
-    """
-    try:
-        # Cerca per nome esatto
-        results = supabase_service.client.table("normalized_products")\
-            .select("*")\
-            .eq("canonical_name", product_name)\
-            .execute()
-        
-        if results.data:
-            return {
-                "success": True,
-                "found": True,
-                "product": results.data[0]
-            }
-        
-        # Cerca per similarità (fuzzy search)
-        results = supabase_service.search_normalized_products(
-            product_name, 
-            limit=5
-        )
-        
-        if results:
-            return {
-                "success": True,
-                "found": True,
-                "product": results[0],  # Primo risultato più simile
-                "note": "Found by similarity"
-            }
-        
-        return {
-            "success": True,
-            "found": False,
-            "product": None
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Database error: {str(e)}",
-            "found": False
-        }
+# (Rimosso) TOOL: FIND EXISTING PRODUCT — policy aggiornata: se manca mapping, creare sempre un nuovo prodotto
 
 
 # ===================================
-# TOOL 2: CREATE NORMALIZED PRODUCT
+# TOOL: CREATE NORMALIZED PRODUCT
 # ===================================
 
 def create_normalized_product(
@@ -127,7 +74,7 @@ def create_normalized_product(
 
 
 # ===================================
-# TOOL 3: CREATE PRODUCT MAPPING
+# TOOL: CREATE PRODUCT MAPPING
 # ===================================
 
 def create_product_mapping(
@@ -194,25 +141,8 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "find_existing_product",
-            "description": "Cerca se un prodotto normalizzato esiste già nel database. Usa sempre questo PRIMA di creare un nuovo prodotto.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "product_name": {
-                        "type": "string",
-                        "description": "Nome prodotto normalizzato da cercare"
-                    }
-                },
-                "required": ["product_name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "create_normalized_product",
-            "description": "Crea un nuovo prodotto normalizzato nel database. Usa SOLO se find_existing_product non lo trova.",
+            "description": "Crea un nuovo prodotto normalizzato nel database.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -269,7 +199,6 @@ def execute_function(function_name: str, arguments: Dict) -> Dict:
         Risultato esecuzione funzione
     """
     functions = {
-        "find_existing_product": find_existing_product,
         "create_normalized_product": create_normalized_product
     }
     

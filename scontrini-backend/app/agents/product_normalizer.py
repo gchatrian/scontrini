@@ -1,28 +1,25 @@
 """
-Product Normalizer Agent - Sistema a Due Step
-Agente OpenAI che normalizza prodotti usando solo chiamate LLM
+Product Normalizer Agent - Single Step
+Agente OpenAI che normalizza prodotti con un unico step LLM + function-calling
 """
 import json
 from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
 from app.config import settings
-from app.agents.prompts import (
-    ABBREVIATION_EXPANSION_PROMPT,
-    PRODUCT_IDENTIFICATION_PROMPT
-)
+from app.agents.prompts import SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT
 from app.agents.tools import TOOL_DEFINITIONS, execute_function, create_product_mapping
 from app.services.supabase_service import supabase_service
 
 
 class ProductNormalizerAgent:
-    """Agente per normalizzazione prodotti con sistema a due step"""
+    """Agente per normalizzazione prodotti con single-step LLM"""
     
     def __init__(self):
         """Inizializza agente"""
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
-        self.temperature = 0.7  # Temperature per entrambi gli step
-        self.max_iterations = 10  # Per function calling nello step 2
+        self.temperature = 0.7
+        self.max_iterations = 10
     
     def normalize_product(
         self,
@@ -31,7 +28,7 @@ class ProductNormalizerAgent:
         price: Optional[float] = None
     ) -> Dict:
         """
-        Normalizza un singolo prodotto usando processo a due step
+        Normalizza un singolo prodotto usando un unico step LLM con function-calling.
         
         Args:
             raw_product_name: Nome grezzo dallo scontrino
@@ -58,31 +55,9 @@ class ProductNormalizerAgent:
                     "confidence": 1.0
                 }
             
-            # =====================================
-            # STEP 1: Espansione Abbreviazioni
-            # =====================================
-            expansion_result = self._expand_abbreviations(
-                raw_product_name, 
-                store_name
-            )
-            
-            if not expansion_result["success"]:
-                return {
-                    "success": False,
-                    "error": f"Step 1 failed: {expansion_result.get('error')}"
-                }
-            
-            expanded_text = expansion_result.get("expanded_text", raw_product_name)
-            expansion_confidence = expansion_result.get("confidence", 0.5)
-            
-            print(f"  📝 Step 1 - Espansione: '{raw_product_name}' → '{expanded_text}' (confidence: {expansion_confidence:.2f})")
-            
-            # =====================================
-            # STEP 2: Identificazione Prodotto
-            # =====================================
+            # Single-step: Identificazione e normalizzazione
             identification_result = self._identify_product(
                 raw_product_name,
-                expanded_text,
                 store_name,
                 price
             )
@@ -93,10 +68,7 @@ class ProductNormalizerAgent:
                     "error": f"Step 2 failed: {identification_result.get('error')}"
                 }
             
-            identification_confidence = identification_result.get("confidence", 0.5)
-            
-            # Calcola confidence finale (media pesata)
-            final_confidence = (0.3 * expansion_confidence) + (0.7 * identification_confidence)
+            final_confidence = identification_result.get("confidence", 0.5)
             
             result = {
                 "success": True,
@@ -104,8 +76,12 @@ class ProductNormalizerAgent:
                 "canonical_name": identification_result["canonical_name"],
                 "created_new": identification_result.get("created_new", False),
                 "confidence": final_confidence,
-                "expansion_applied": expanded_text != raw_product_name,
-                "expanded_text": expanded_text if expanded_text != raw_product_name else None
+                "brand": identification_result.get("brand"),
+                "category": identification_result.get("category"),
+                "subcategory": identification_result.get("subcategory"),
+                "size": identification_result.get("size"),
+                "unit_type": identification_result.get("unit_type"),
+                "identification_notes": identification_result.get("identification_notes")
             }
             
             # Crea mapping raw_name → normalized_product
@@ -125,100 +101,29 @@ class ProductNormalizerAgent:
                 "error": f"Normalization error: {str(e)}"
             }
     
-    def _expand_abbreviations(
-        self,
-        raw_text: str,
-        store_name: Optional[str] = None
-    ) -> Dict:
-        """
-        Step 1: Espande le abbreviazioni nel testo grezzo
-        
-        Returns:
-            Dict con testo espanso e confidence
-        """
-        try:
-            # Costruisci messaggio con contesto
-            context = f"Negozio: {store_name}" if store_name else "Negozio: non specificato"
-            
-            user_message = f"""Espandi le abbreviazioni in questo testo da scontrino:
-
-Testo grezzo: "{raw_text}"
-Contesto: {context}
-
-Analizza e ricostruisci le abbreviazioni presenti."""
-            
-            # Chiamata LLM per espansione
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": ABBREVIATION_EXPANSION_PROMPT},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=self.temperature
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Parse JSON response
-            try:
-                if content.startswith("```"):
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                
-                result = json.loads(content)
-                result["success"] = True
-                return result
-                
-            except json.JSONDecodeError:
-                # Se non riesce a parsare, ritorna il testo originale
-                return {
-                    "success": True,
-                    "expanded_text": raw_text,
-                    "confidence": 0.3,
-                    "error": "Failed to parse expansion"
-                }
-                
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "expanded_text": raw_text,
-                "confidence": 0.0
-            }
-    
     def _identify_product(
         self,
         raw_name: str,
-        expanded_name: str,
         store_name: Optional[str] = None,
         price: Optional[float] = None
     ) -> Dict:
         """
-        Step 2: Identifica e normalizza il prodotto usando function calling
-        
-        Returns:
-            Dict con prodotto normalizzato
+        Single-step: Identifica e normalizza il prodotto usando function-calling.
         """
-        # Crea messaggio per l'agente
         user_message = self._create_identification_message(
-            raw_name,
-            expanded_name,
-            store_name,
-            price
+            raw_name=raw_name,
+            store_name=store_name,
+            price=price
         )
-        
-        # Esegui loop con function calling
         return self._run_identification_loop(user_message)
     
     def _create_identification_message(
         self,
         raw_name: str,
-        expanded_name: str,
         store_name: Optional[str],
         price: Optional[float]
     ) -> str:
-        """Crea messaggio per step 2 di identificazione"""
+        """Crea messaggio per single-step identificazione"""
         context_parts = []
         
         if store_name:
@@ -229,17 +134,17 @@ Analizza e ricostruisci le abbreviazioni presenti."""
         
         context_str = " | ".join(context_parts) if context_parts else "Nessun contesto aggiuntivo"
         
-        message = f"""Identifica e normalizza questo prodotto:
+        message = f"""Identifica e normalizza questo prodotto in UN SOLO STEP:
 
-Nome grezzo originale: "{raw_name}"
-Nome con abbreviazioni espanse: "{expanded_name}"
+RAW: "{raw_name}"
 Contesto: {context_str}
 
-Processo da seguire:
-1. Cerca prima se esiste già nel database (find_existing_product)
-2. Se non trovato, crea nuovo prodotto normalizzato (create_normalized_product)
-
-Fornisci il risultato finale in formato JSON."""
+Istruzioni:
+- Interpreta abbreviazioni/nomi compressi presenti nel RAW.
+- Estrai BRAND (se presente), PRODOTTO, FORMATO.
+- Se uno tra BRAND o PRODOTTO è incerto, parti da quello più certo per vincolare la ricerca dell'altro (es. se PRODOTTO=Acqua Frizzante, limita i brand plausibili).
+- Non esiste un mapping per questo RAW: crea SEMPRE un nuovo prodotto usando create_normalized_product.
+- Rispondi SOLO con JSON finale (niente testo extra)."""
         
         return message
     
@@ -251,7 +156,7 @@ Fornisci il risultato finale in formato JSON."""
             Dict con risultato identificazione
         """
         messages = [
-            {"role": "system", "content": PRODUCT_IDENTIFICATION_PROMPT},
+            {"role": "system", "content": SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT},
             {"role": "user", "content": user_message}
         ]
         
