@@ -31,6 +31,50 @@ class ProcessReceiptRequest(BaseModel):
 # RESPONSE SCHEMAS
 # ===================================
 
+class ReceiptItemData(BaseModel):
+    """Dati di un item parsato"""
+    raw_product_name: str
+    quantity: float = 1.0
+    unit_price: float = 0.0
+    total_price: float = 0.0
+    category: Optional[str] = None
+
+class ParsedReceiptData(BaseModel):
+    """Dati parsati dallo scontrino"""
+    store_name: Optional[str] = None
+    store_address: Optional[str] = None
+    receipt_date: Optional[str] = None
+    receipt_time: Optional[str] = None
+    total_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    items: List[ReceiptItemData] = []
+
+class ProcessReceiptResponse(BaseModel):
+    """Response dopo processing scontrino"""
+    success: bool
+    receipt_id: Optional[str] = None
+    message: Optional[str] = None
+    parsed_data: Optional[ParsedReceiptData] = None
+    ocr_confidence: Optional[float] = None
+    error: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "receipt_id": "123e4567-e89b-12d3-a456-426614174002",
+                "message": "Scontrino processato con successo",
+                "ocr_confidence": 0.95,
+                "parsed_data": {
+                    "store_name": "Esselunga",
+                    "total_amount": 45.20,
+                    "items": []
+                }
+            }
+        }
+
+
 class ReceiptItemResponse(BaseModel):
     """Schema per item scontrino"""
     id: str
@@ -71,25 +115,6 @@ class ReceiptResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-class ProcessReceiptResponse(BaseModel):
-    """Response dopo processing scontrino"""
-    success: bool
-    receipt_id: str
-    message: str
-    receipt: Optional[ReceiptResponse] = None
-    items_count: Optional[int] = None
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "receipt_id": "123e4567-e89b-12d3-a456-426614174002",
-                "message": "Scontrino processato con successo",
-                "items_count": 15
-            }
-        }
 
 
 class ReceiptListResponse(BaseModel):
