@@ -98,12 +98,17 @@ async def process_receipt(request: ProcessReceiptRequest):
             
             if store_name:
                 print(f"🏪 Cercando store: {store_name}")
-                store = store_service.find_or_create_store(
-                    name=store_name,
-                    address_full=parsing_result.get("store_address")
-                )
-                store_id = store["id"]
-                print(f"✅ Store: {store['name']} (ID: {store_id})")
+                store_result = store_service.find_or_create_store({
+                    "name": store_name,
+                    "address_full": parsing_result.get("store_address")
+                })
+                
+                if store_result.get("success"):
+                    store_id = store_result["store_id"]
+                    print(f"✅ Store: {store_result['store']['name']} (ID: {store_id})")
+                    print(f"   Matched by: {store_result.get('matched_by')}")
+                else:
+                    print("⚠️ Store matching fallito, continuando senza store_id")
             
             # Step 5: Aggiorna scontrino con dati parsati
             print("💾 Salvando dati scontrino...")
