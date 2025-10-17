@@ -1,22 +1,24 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({ subsets: ["latin"] });
+import { AuthProvider } from "@/contexts/AuthContext";
 
 export const metadata: Metadata = {
   title: "Scontrini - Gestisci i tuoi acquisti",
-  description: "Digitalizza scontrini e migliora le tue scelte di spesa con l'AI",
+  description: "Digitalizza scontrini e analizza le tue spese",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="it">
-      <body className={inter.className}>{children}</body>
+      <body>
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+      </body>
     </html>
   );
 }

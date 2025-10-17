@@ -8,6 +8,12 @@ from google.cloud import vision
 from google.cloud.vision_v1 import types
 import io
 from PIL import Image
+from app.config import settings
+
+# IMPORTANTE: Imposta la variabile d'ambiente PRIMA di inizializzare il client
+if settings.GOOGLE_APPLICATION_CREDENTIALS:
+    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = settings.GOOGLE_APPLICATION_CREDENTIALS
+
 
 
 class OCRService:
