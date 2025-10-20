@@ -266,7 +266,101 @@ class SupabaseService:
             .execute()
         
         return response.data
-    
+    """
+    Aggiungi questo metodo alla classe SupabaseService in supabase_service.py
+    Posizionarlo dopo i metodi NORMALIZED PRODUCTS
+    """
+
+    # ===================================
+    # PURCHASE HISTORY
+    # ===================================
+
+    def create_purchase_history(
+        self,
+        household_id: str,
+        receipt_id: str,
+        receipt_item_id: str,
+        normalized_product_id: Optional[str],
+        purchase_date: date,
+        store_id: Optional[str] = None,
+        quantity: Optional[float] = None,
+        unit_price: Optional[float] = None,
+        total_price: float = 0.0
+    ) -> Dict:
+        """
+        Crea record storico acquisto con prodotto normalizzato
+        
+        Args:
+            household_id: ID household
+            receipt_id: ID scontrino
+            receipt_item_id: ID item grezzo
+            normalized_product_id: ID prodotto normalizzato
+            purchase_date: Data acquisto
+            store_id: ID negozio
+            quantity: Quantità
+            unit_price: Prezzo unitario
+            total_price: Prezzo totale
+            
+        Returns:
+            Dict con record creato
+        """
+        
+        data = {
+            "household_id": household_id,
+            "receipt_id": receipt_id,
+            "receipt_item_id": receipt_item_id,
+            "normalized_product_id": normalized_product_id,
+            "purchase_date": purchase_date.isoformat() if isinstance(purchase_date, date) else purchase_date,
+            "store_id": store_id,
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "total_price": total_price
+        }
+        
+        response = self.client.table("purchase_history").insert(data).execute()
+        return response.data[0] if response.data else None
+
+    def get_purchase_history(
+        self,
+        household_id: str,
+        limit: int = 100,
+        product_id: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> List[Dict]:
+        """
+        Ottieni storico acquisti household con filtri
+        
+        Args:
+            household_id: ID household
+            limit: Numero massimo risultati
+            product_id: Filtra per prodotto specifico
+            start_date: Data inizio
+            end_date: Data fine
+            
+        Returns:
+            Lista di acquisti
+        """
+        
+        query = self.client.table("purchase_history")\
+            .select("*, normalized_products(*), receipts(receipt_date, store_name)")\
+            .eq("household_id", household_id)\
+            .order("purchase_date", desc=True)\
+            .limit(limit)
+        
+        if product_id:
+            query = query.eq("normalized_product_id", product_id)
+        
+        if start_date:
+            query = query.gte("purchase_date", start_date.isoformat())
+        
+        if end_date:
+            query = query.lte("purchase_date", end_date.isoformat())
+        
+        response = query.execute()
+        return response.data
+
+
     # ===================================
     # STORAGE
     # ===================================

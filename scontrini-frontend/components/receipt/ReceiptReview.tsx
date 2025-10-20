@@ -1,13 +1,23 @@
+// components/receipt/ReceiptReview.tsx
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { CheckCircle2, AlertCircle, Edit2, Trash2 } from 'lucide-react'
-import { ParsedReceipt, ReceiptItem } from '@/types/receipt'
+import { Separator } from '@/components/ui/separator'
+import { 
+  CheckCircle2, 
+  AlertCircle, 
+  Calendar,
+  Clock,
+  CreditCard,
+  Receipt as ReceiptIcon,
+  ChevronRight
+} from 'lucide-react'
+import { ParsedReceipt } from '@/types/receipt'
+import { StoreInfoCard } from './StoreInfoCard'
+import { ProductReviewItem } from './ProductReviewItem'
 
 interface ReceiptReviewProps {
   parsedData: ParsedReceipt
@@ -24,254 +34,348 @@ export function ReceiptReview({
   onConfirm,
   onCancel
 }: ReceiptReviewProps) {
-  // Assicurati che parsedData abbia valori di default
-  const safeData = {
-    store_name: parsedData?.store_name || '',
-    store_address: parsedData?.store_address || '',
-    receipt_date: parsedData?.receipt_date || '',
-    receipt_time: parsedData?.receipt_time || '',
-    total_amount: parsedData?.total_amount || 0,
-    tax_amount: parsedData?.tax_amount || 0,
-    payment_method: parsedData?.payment_method || '',
-    items: parsedData?.items || []
+  const [editedData, setEditedData] = useState<ParsedReceipt>(parsedData)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Conta prodotti pending review
+  const pendingReviewCount = editedData.items.filter(
+    item => item.pending_review
+  ).length
+
+  // Conta prodotti verificati
+  const verifiedCount = editedData.items.filter(
+    item => !item.pending_review
+  ).length
+
+  const handleStoreUpdate = (storeData: any) => {
+    // Aggiorna store nel state locale
+    setEditedData({
+      ...editedData,
+      store_name: storeData.name,
+      company_name: storeData.company_name,
+      vat_number: storeData.vat_number,
+      store_address: storeData.address_full,
+      store_data: {
+        ...editedData.store_data,
+        ...storeData
+      }
+    })
+
+    // TODO: Implementare chiamata API per salvare store se necessario
+    console.log('Store aggiornato:', storeData)
   }
 
-  const [editedData, setEditedData] = useState<ParsedReceipt>(safeData)
-  const [editingItem, setEditingItem] = useState<number | null>(null)
+  const handleProductUpdate = async (itemId: string, updates: any) => {
+    // Aggiorna item nel state locale
+    const updatedItems = editedData.items.map(item => {
+      if (item.receipt_item_id === itemId) {
+        return {
+          ...item,
+          ...updates,
+          pending_review: false,
+          confidence: 1.0
+        }
+      }
+      return item
+    })
 
-  const updateField = (field: keyof ParsedReceipt, value: any) => {
-    setEditedData(prev => ({ ...prev, [field]: value }))
-  }
+    setEditedData({
+      ...editedData,
+      items: updatedItems
+    })
 
-  const updateItem = (index: number, field: keyof ReceiptItem, value: any) => {
-    const newItems = [...editedData.items]
-    newItems[index] = { ...newItems[index], [field]: value }
-    setEditedData(prev => ({ ...prev, items: newItems }))
-  }
+    // Chiama API per salvare update
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/review`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates)
+      })
 
-  const removeItem = (index: number) => {
-    const newItems = editedData.items.filter((_, i) => i !== index)
-    setEditedData(prev => ({ ...prev, items: newItems }))
-  }
+      if (!response.ok) {
+        throw new Error('Errore durante aggiornamento prodotto')
+      }
 
-  const addItem = () => {
-    const newItem: ReceiptItem = {
-      raw_product_name: '',
-      quantity: 1,
-      unit_price: 0,
-      total_price: 0
+      const result = await response.json()
+      console.log('Prodotto aggiornato:', result)
+    } catch (error) {
+      console.error('Errore update prodotto:', error)
+      // In caso di errore, potresti voler mostrare un toast/notification
     }
-    setEditedData(prev => ({ ...prev, items: [...prev.items, newItem] }))
-    setEditingItem(editedData.items.length)
   }
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
+    if (pendingReviewCount > 0) {
+      // Mostra warning se ci sono ancora prodotti da verificare
+      const confirmed = window.confirm(
+        `Ci sono ancora ${pendingReviewCount} prodotti che richiedono verifica. Vuoi procedere comunque?`
+      )
+      if (!confirmed) return
+    }
+
+    setIsSubmitting(true)
     onConfirm(editedData)
   }
 
   const confidenceBadge = ocrConfidence >= 0.8 ? (
-    <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">
       <CheckCircle2 className="w-3 h-3 mr-1" />
-      Confidenza Alta ({(ocrConfidence * 100).toFixed(0)}%)
+      Alta qualità ({(ocrConfidence * 100).toFixed(0)}%)
+    </Badge>
+  ) : ocrConfidence >= 0.6 ? (
+    <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-300">
+      <AlertCircle className="w-3 h-3 mr-1" />
+      Qualità media ({(ocrConfidence * 100).toFixed(0)}%)
     </Badge>
   ) : (
-    <Badge variant="secondary">
+    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">
       <AlertCircle className="w-3 h-3 mr-1" />
-      Confidenza Media ({(ocrConfidence * 100).toFixed(0)}%)
+      Bassa qualità ({(ocrConfidence * 100).toFixed(0)}%)
     </Badge>
   )
 
   return (
     <div className="space-y-6">
-      {/* Header con Badge */}
+      {/* Header */}
       <Card>
         <CardHeader>
-          <div className="flex items-start justify-between">
-            <div>
-              <CardTitle>Verifica i Dati</CardTitle>
-              <CardDescription>
-                Controlla e correggi eventuali errori prima di salvare
-              </CardDescription>
-            </div>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <ReceiptIcon className="w-5 h-5" />
+              Verifica Scontrino
+            </CardTitle>
             {confidenceBadge}
           </div>
         </CardHeader>
-      </Card>
-
-      {/* Anteprima Immagine */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Immagine Scontrino</CardTitle>
-        </CardHeader>
         <CardContent>
-          <img
-            src={imageUrl}
-            alt="Scontrino"
-            className="w-full h-auto max-h-64 object-contain rounded-lg border"
-          />
+          <p className="text-sm text-muted-foreground">
+            Controlla i dati estratti e verifica i prodotti contrassegnati.
+          </p>
         </CardContent>
       </Card>
 
-      {/* Dati Generali */}
+      {/* Store Info */}
+      <StoreInfoCard
+        storeName={editedData.store_name}
+        companyName={editedData.company_name}
+        vatNumber={editedData.vat_number}
+        address={editedData.store_address}
+        storeData={editedData.store_data}
+        editable={true}
+        onUpdate={handleStoreUpdate}
+      />
+
+      {/* Receipt Info */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Informazioni Generali</CardTitle>
+          <CardTitle className="text-lg">Dettagli Scontrino</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3">
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="store_name">Negozio</Label>
-              <Input
-                id="store_name"
-                value={editedData.store_name || ''}
-                onChange={(e) => updateField('store_name', e.target.value)}
-                placeholder="Nome negozio"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="receipt_date">Data</Label>
-              <Input
-                id="receipt_date"
-                type="date"
-                value={editedData.receipt_date || ''}
-                onChange={(e) => updateField('receipt_date', e.target.value)}
-              />
-            </div>
+            {/* Data */}
+            {editedData.receipt_date && (
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Data</p>
+                  <p className="text-sm font-medium">
+                    {new Date(editedData.receipt_date).toLocaleDateString('it-IT')}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Ora */}
+            {editedData.receipt_time && (
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Ora</p>
+                  <p className="text-sm font-medium">{editedData.receipt_time}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Metodo Pagamento */}
+            {editedData.payment_method && (
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Pagamento</p>
+                  <p className="text-sm font-medium capitalize">{editedData.payment_method}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Totale */}
+            {editedData.total_amount !== undefined && (
+              <div className="flex items-center gap-2">
+                <ReceiptIcon className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Totale</p>
+                  <p className="text-lg font-bold">€{editedData.total_amount.toFixed(2)}</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="store_address">Indirizzo</Label>
-            <Input
-              id="store_address"
-              value={editedData.store_address || ''}
-              onChange={(e) => updateField('store_address', e.target.value)}
-              placeholder="Indirizzo negozio"
-            />
-          </div>
-
-          <div className="grid grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="receipt_time">Ora</Label>
-              <Input
-                id="receipt_time"
-                type="time"
-                value={editedData.receipt_time || ''}
-                onChange={(e) => updateField('receipt_time', e.target.value)}
-              />
+          {/* Sconto */}
+          {editedData.discount_amount && editedData.discount_amount > 0 && (
+            <div className="pt-2 border-t">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Sconto applicato</span>
+                <span className="text-sm font-medium text-green-600">
+                  -€{editedData.discount_amount.toFixed(2)}
+                </span>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="total_amount">Totale (€)</Label>
-              <Input
-                id="total_amount"
-                type="number"
-                step="0.01"
-                value={editedData.total_amount || 0}
-                onChange={(e) => updateField('total_amount', parseFloat(e.target.value))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="payment_method">Pagamento</Label>
-              <Input
-                id="payment_method"
-                value={editedData.payment_method || ''}
-                onChange={(e) => updateField('payment_method', e.target.value)}
-                placeholder="es. Carta"
-              />
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Lista Prodotti */}
+      {/* Products Section */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">
               Prodotti ({editedData.items.length})
             </CardTitle>
-            <Button variant="outline" size="sm" onClick={addItem}>
-              Aggiungi Prodotto
-            </Button>
+            <div className="flex gap-2">
+              {pendingReviewCount > 0 && (
+                <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-400">
+                  <AlertCircle className="w-3 h-3 mr-1" />
+                  {pendingReviewCount} da verificare
+                </Badge>
+              )}
+              {verifiedCount > 0 && (
+                <Badge variant="outline" className="bg-green-100 text-green-800 border-green-400">
+                  <CheckCircle2 className="w-3 h-3 mr-1" />
+                  {verifiedCount} verificati
+                </Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {editedData.items.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Nessun prodotto trovato. Aggiungi manualmente.
-            </div>
-          ) : (
-            editedData.items.map((item, index) => (
-              <div
-                key={index}
-                className="p-4 border rounded-lg space-y-3 hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 space-y-2">
-                    <Input
-                      value={item.raw_product_name}
-                      onChange={(e) => updateItem(index, 'raw_product_name', e.target.value)}
-                      placeholder="Nome prodotto"
-                      className="font-medium"
-                    />
-                    <div className="grid grid-cols-3 gap-2">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={item.quantity}
-                        onChange={(e) => {
-                          const qty = parseFloat(e.target.value)
-                          updateItem(index, 'quantity', qty)
-                          updateItem(index, 'total_price', qty * item.unit_price)
-                        }}
-                        placeholder="Qtà"
-                      />
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={item.unit_price}
-                        onChange={(e) => {
-                          const price = parseFloat(e.target.value)
-                          updateItem(index, 'unit_price', price)
-                          updateItem(index, 'total_price', item.quantity * price)
-                        }}
-                        placeholder="€ Cad."
-                      />
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={item.total_price}
-                        onChange={(e) => updateItem(index, 'total_price', parseFloat(e.target.value))}
-                        placeholder="€ Tot."
-                      />
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => removeItem(index)}
-                    className="ml-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+          {/* Warning se ci sono pending review */}
+          {pendingReviewCount > 0 && (
+            <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-semibold text-yellow-900 mb-1">
+                    Verifica Richiesta
+                  </h4>
+                  <p className="text-sm text-yellow-800">
+                    Alcuni prodotti richiedono la tua verifica perché il sistema non è riuscito 
+                    a identificarli con sufficiente sicurezza. Controlla e correggi i dati se necessario.
+                  </p>
                 </div>
               </div>
-            ))
+            </div>
           )}
+
+          {/* Prodotti PENDING REVIEW - mostrati per primi */}
+          {editedData.items
+            .filter(item => item.pending_review)
+            .map((item, idx) => (
+              <ProductReviewItem
+                key={`pending-${idx}`}
+                item={item}
+                editable={true}
+                highlighted={true}
+                onUpdate={handleProductUpdate}
+              />
+            ))}
+
+          {/* Separator se ci sono entrambi i tipi */}
+          {pendingReviewCount > 0 && verifiedCount > 0 && (
+            <div className="flex items-center gap-4 my-6">
+              <Separator className="flex-1" />
+              <span className="text-xs text-muted-foreground uppercase tracking-wide">
+                Prodotti Verificati (editabili)
+              </span>
+              <Separator className="flex-1" />
+            </div>
+          )}
+
+          {/* Prodotti AUTO-VERIFIED - ORA EDITABILI */}
+          {editedData.items
+            .filter(item => !item.pending_review)
+            .map((item, idx) => (
+              <ProductReviewItem
+                key={`verified-${idx}`}
+                item={item}
+                editable={true}
+                highlighted={false}
+                onUpdate={handleProductUpdate}
+              />
+            ))}
+        </CardContent>
+      </Card>
+
+      {/* Summary */}
+      <Card className="bg-slate-50 border-slate-200">
+        <CardContent className="pt-6">
+          <div className="flex justify-between items-center mb-4">
+            <span className="text-lg font-semibold">Totale Scontrino</span>
+            <span className="text-2xl font-bold">
+              €{editedData.total_amount?.toFixed(2) || '0.00'}
+            </span>
+          </div>
+          
+          <div className="text-sm text-muted-foreground space-y-1">
+            <div className="flex justify-between">
+              <span>Prodotti:</span>
+              <span className="font-medium">{editedData.items.length}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Verificati:</span>
+              <span className="font-medium text-green-600">{verifiedCount}</span>
+            </div>
+            {pendingReviewCount > 0 && (
+              <div className="flex justify-between">
+                <span>Da verificare:</span>
+                <span className="font-medium text-yellow-600">{pendingReviewCount}</span>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
       {/* Action Buttons */}
-      <Card>
-        <CardFooter className="flex justify-between pt-6">
-          <Button variant="outline" onClick={onCancel}>
-            Annulla
-          </Button>
-          <Button onClick={handleConfirm} size="lg">
-            <CheckCircle2 className="w-4 h-4 mr-2" />
-            Conferma e Salva
-          </Button>
-        </CardFooter>
-      </Card>
+      <div className="flex gap-4 pt-4 sticky bottom-0 bg-white p-4 border-t">
+        <Button
+          variant="outline"
+          onClick={onCancel}
+          disabled={isSubmitting}
+          className="flex-1"
+        >
+          Annulla
+        </Button>
+        <Button
+          onClick={handleConfirm}
+          disabled={isSubmitting}
+          className="flex-1"
+        >
+          {isSubmitting ? (
+            'Salvataggio...'
+          ) : pendingReviewCount > 0 ? (
+            <>
+              Conferma ({pendingReviewCount} avvisi)
+              <ChevronRight className="w-4 h-4 ml-2" />
+            </>
+          ) : (
+            <>
+              Conferma e Salva
+              <CheckCircle2 className="w-4 h-4 ml-2" />
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   )
 }

@@ -1,30 +1,19 @@
 """
-Pydantic schemas per Receipt API
+Aggiorna app/api/schemas/receipt.py con questi schemas
 """
-from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import date, time, datetime
-from decimal import Decimal
-
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import date, time
 
 # ===================================
 # REQUEST SCHEMAS
 # ===================================
 
 class ProcessReceiptRequest(BaseModel):
-    """Request per processare uno scontrino"""
-    household_id: str = Field(..., description="ID household")
-    uploaded_by: str = Field(..., description="ID utente che carica")
-    image_url: str = Field(..., description="URL immagine scontrino")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "household_id": "123e4567-e89b-12d3-a456-426614174000",
-                "uploaded_by": "123e4567-e89b-12d3-a456-426614174001",
-                "image_url": "https://storage.supabase.co/..."
-            }
-        }
+    """Request per processare scontrino"""
+    household_id: str
+    uploaded_by: str
+    image_url: str
 
 
 # ===================================
@@ -32,104 +21,120 @@ class ProcessReceiptRequest(BaseModel):
 # ===================================
 
 class ReceiptItemData(BaseModel):
-    """Dati di un item parsato"""
+    """Dati singolo item con normalizzazione"""
+    # Dati grezzi
     raw_product_name: str
-    quantity: float = 1.0
-    unit_price: float = 0.0
-    total_price: float = 0.0
+    quantity: float
+    unit_price: float
+    total_price: float
+    
+    # Dati normalizzati
+    normalized_product_id: Optional[str] = None
+    canonical_name: Optional[str] = None
+    brand: Optional[str] = None
     category: Optional[str] = None
+    subcategory: Optional[str] = None
+    size: Optional[str] = None
+    unit_type: Optional[str] = None
+    confidence: Optional[float] = None
+    pending_review: Optional[bool] = False
+    from_cache: Optional[bool] = False
+
+
+class StoreData(BaseModel):
+    """Dati store completi"""
+    id: str
+    name: str
+    chain: Optional[str] = None
+    branch_name: Optional[str] = None
+    vat_number: Optional[str] = None
+    company_name: Optional[str] = None
+    address_full: Optional[str] = None
+    address_city: Optional[str] = None
+    address_province: Optional[str] = None
+    is_mock: bool = False
+
 
 class ParsedReceiptData(BaseModel):
-    """Dati parsati dallo scontrino"""
+    """Dati scontrino parsato con store e normalizzazione"""
+    # Store info
+    store_id: Optional[str] = None
+    store_name: Optional[str] = None
+    company_name: Optional[str] = None
+    vat_number: Optional[str] = None
+    store_address: Optional[str] = None
+    store_data: Optional[dict] = None  # Oggetto store completo
+    
+    # Receipt info
+    receipt_date: Optional[str] = None
+    receipt_time: Optional[str] = None
+    total_amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    discount_amount: Optional[float] = None
+    
+    # Items con normalizzazione
+    items: List[ReceiptItemData] = []
+
+
+class ProcessReceiptResponse(BaseModel):
+    """Response processamento scontrino"""
+    success: bool
+    receipt_id: Optional[str] = None
+    parsed_data: Optional[ParsedReceiptData] = None
+    ocr_confidence: Optional[float] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+# ===================================
+# UPDATE REVIEW SCHEMAS
+# ===================================
+
+class UpdateProductReviewRequest(BaseModel):
+    """Request per aggiornare prodotto dopo review utente"""
+    # Dati corretti dall'utente
+    canonical_name: str
+    brand: Optional[str] = None
+    category: str
+    subcategory: Optional[str] = None
+    size: Optional[str] = None
+    unit_type: Optional[str] = None
+
+
+class UpdateProductReviewResponse(BaseModel):
+    """Response update review"""
+    success: bool
+    message: Optional[str] = None
+    normalized_product_id: Optional[str] = None
+
+
+# ===================================
+# ALTRI SCHEMAS (già esistenti, mantenere)
+# ===================================
+
+class ReceiptResponse(BaseModel):
+    """Response singolo receipt"""
+    id: str
+    household_id: str
+    uploaded_by: str
+    image_url: str
+    store_id: Optional[str] = None
     store_name: Optional[str] = None
     store_address: Optional[str] = None
     receipt_date: Optional[str] = None
     receipt_time: Optional[str] = None
     total_amount: Optional[float] = None
-    tax_amount: Optional[float] = None
     payment_method: Optional[str] = None
-    items: List[ReceiptItemData] = []
-
-class ProcessReceiptResponse(BaseModel):
-    """Response dopo processing scontrino"""
-    success: bool
-    receipt_id: Optional[str] = None
-    message: Optional[str] = None
-    parsed_data: Optional[ParsedReceiptData] = None
-    ocr_confidence: Optional[float] = None
-    error: Optional[str] = None
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "success": True,
-                "receipt_id": "123e4567-e89b-12d3-a456-426614174002",
-                "message": "Scontrino processato con successo",
-                "ocr_confidence": 0.95,
-                "parsed_data": {
-                    "store_name": "Esselunga",
-                    "total_amount": 45.20,
-                    "items": []
-                }
-            }
-        }
-
-
-class ReceiptItemResponse(BaseModel):
-    """Schema per item scontrino"""
-    id: str
-    receipt_id: str
-    raw_product_name: str
-    quantity: Optional[Decimal] = None
-    unit_price: Optional[Decimal] = None
-    total_price: Decimal
-    line_number: Optional[int] = None
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class ReceiptResponse(BaseModel):
-    """Schema per scontrino"""
-    id: str
-    household_id: str
-    uploaded_by: Optional[str] = None
-    image_url: str
-    store_id: Optional[str] = None
-    store_name: Optional[str] = None
-    store_address: Optional[str] = None
-    receipt_date: Optional[date] = None
-    receipt_time: Optional[time] = None
-    total_amount: Optional[Decimal] = None
-    payment_method: Optional[str] = None
-    discount_amount: Optional[Decimal] = None
-    raw_ocr_text: Optional[str] = None
-    ocr_confidence: Optional[float] = None
     processing_status: str
-    created_at: datetime
-    updated_at: datetime
-    
-    # Items opzionali (quando richiesti)
-    items: Optional[List[ReceiptItemResponse]] = None
-
-    class Config:
-        from_attributes = True
+    ocr_confidence: Optional[float] = None
+    created_at: str
+    updated_at: str
+    items: List[dict] = []
 
 
 class ReceiptListResponse(BaseModel):
-    """Response per lista scontrini"""
+    """Response lista receipts"""
     receipts: List[ReceiptResponse]
     total: int
-    page: int = 1
-    page_size: int = 50
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "receipts": [],
-                "total": 0,
-                "page": 1,
-                "page_size": 50
-            }
-        }
+    page: int
+    page_size: int
