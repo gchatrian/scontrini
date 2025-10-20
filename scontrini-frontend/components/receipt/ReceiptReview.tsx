@@ -37,6 +37,14 @@ export function ReceiptReview({
   const [editedData, setEditedData] = useState<ParsedReceipt>(parsedData)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  // Log dati iniziali
+  console.log('📊 Dati iniziali ricevuti:', {
+    totalItems: parsedData.items.length,
+    pendingReviewItems: parsedData.items.filter(item => item.pending_review).length,
+    verifiedItems: parsedData.items.filter(item => item.user_verified).length,
+    sampleItem: parsedData.items[0]
+  })
+
   // Conta prodotti pending review
   const pendingReviewCount = editedData.items.filter(
     item => item.pending_review
@@ -66,15 +74,20 @@ export function ReceiptReview({
   }
 
   const handleProductUpdate = async (itemId: string, updates: any) => {
+    console.log('🔄 Parent riceve update per item:', itemId, updates)
+    
     // Aggiorna item nel state locale
     const updatedItems = editedData.items.map(item => {
       if (item.receipt_item_id === itemId) {
-        return {
+        const updatedItem = {
           ...item,
           ...updates,
-          pending_review: false,
-          confidence: 1.0
+          pending_review: updates.user_verified ? false : item.pending_review,
+          confidence: updates.user_verified ? 1.0 : item.confidence,
+          user_verified: updates.user_verified || item.user_verified
         }
+        console.log('✅ Item aggiornato nel parent:', updatedItem)
+        return updatedItem
       }
       return item
     })
@@ -87,20 +100,39 @@ export function ReceiptReview({
     // Chiama API per salvare update
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/review`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updates)
-      })
+      
+      // Se è una conferma utente, usa endpoint specifico
+      if (updates.user_verified) {
+        const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/confirm`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        })
 
-      if (!response.ok) {
-        throw new Error('Errore durante aggiornamento prodotto')
+        if (!response.ok) {
+          throw new Error('Errore durante conferma prodotto')
+        }
+
+        const result = await response.json()
+        console.log('Prodotto confermato:', result)
+      } else {
+        // Update normale
+        const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/review`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updates)
+        })
+
+        if (!response.ok) {
+          throw new Error('Errore durante aggiornamento prodotto')
+        }
+
+        const result = await response.json()
+        console.log('Prodotto aggiornato:', result)
       }
-
-      const result = await response.json()
-      console.log('Prodotto aggiornato:', result)
     } catch (error) {
       console.error('Errore update prodotto:', error)
       // In caso di errore, potresti voler mostrare un toast/notification
@@ -271,7 +303,7 @@ export function ReceiptReview({
                   </h4>
                   <p className="text-sm text-yellow-800">
                     Alcuni prodotti richiedono la tua verifica perché il sistema non è riuscito 
-                    a identificarli con sufficiente sicurezza. Controlla e correggi i dati se necessario.
+                    a identificarli con sufficiente sicurezza. Controlla e correggi i dati se necessario. Se il riconoscimento è corretto premi su 'Conferma senza modifiche'
                   </p>
                 </div>
               </div>

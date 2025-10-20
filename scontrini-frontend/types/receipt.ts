@@ -64,6 +64,7 @@ export interface ReceiptItemWithNormalized extends ReceiptItem {
   confidence?: number
   pending_review?: boolean
   from_cache?: boolean
+  user_verified?: boolean
 }
 
 // ===================================

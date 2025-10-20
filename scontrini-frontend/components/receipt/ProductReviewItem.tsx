@@ -1,7 +1,7 @@
 // components/receipt/ProductReviewItem.tsx
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,15 +47,76 @@ export function ProductReviewItem({
     total_price: item.total_price || 0
   })
 
+  // Usa sempre i valori dalle props, non stato locale
   const isPendingReview = item.pending_review || false
   const confidence = item.confidence || 0
   const fromCache = item.from_cache || false
+  const userVerified = item.user_verified || false
+  
+  // Sincronizza editData quando le props cambiano
+  useEffect(() => {
+    setEditData({
+      raw_product_name: item.raw_product_name || '',
+      canonical_name: item.canonical_name || '',
+      brand: item.brand || '',
+      category: item.category || '',
+      subcategory: item.subcategory || '',
+      size: item.size || '',
+      unit_type: item.unit_type || '',
+      quantity: item.quantity || 1,
+      unit_price: item.unit_price || 0,
+      total_price: item.total_price || 0
+    })
+  }, [item])
+
+  // Mostra pulsante "Conferma senza modifiche" solo se:
+  // - È in pending review
+  // - Non è stato ancora confermato dall'utente
+  // - Non è in modalità editing
+  const showConfirmButton = isPendingReview && !userVerified && !isEditing
+  
+  console.log('🔍 Visibilità pulsante per', item.raw_product_name, {
+    isPendingReview,
+    userVerified,
+    isEditing,
+    showConfirmButton
+  })
 
   const handleSave = () => {
+    console.log('💾 Salva cliccato!', {
+      itemId: item.receipt_item_id,
+      hasOnUpdate: !!onUpdate,
+      currentUserVerified: userVerified,
+      currentPendingReview: isPendingReview
+    })
+    
     if (onUpdate && item.receipt_item_id) {
-      onUpdate(item.receipt_item_id, editData)
+      onUpdate(item.receipt_item_id, {
+        ...editData,
+        user_verified: true,
+        pending_review: false,
+        confidence: 1.0
+      })
     }
     setIsEditing(false)
+  }
+
+  const handleConfirmWithoutChanges = () => {
+    console.log('🟢 Conferma senza modifiche cliccata!', {
+      itemId: item.receipt_item_id,
+      hasOnUpdate: !!onUpdate,
+      currentUserVerified: userVerified,
+      currentPendingReview: isPendingReview
+    })
+    
+    if (onUpdate && item.receipt_item_id) {
+      onUpdate(item.receipt_item_id, {
+        ...editData,
+        user_verified: true,
+        pending_review: false,
+        confidence: 1.0
+      })
+    }
   }
 
   const handleCancel = () => {
@@ -76,6 +137,15 @@ export function ProductReviewItem({
 
   // Determina colore badge confidence
   const getConfidenceBadge = () => {
+    if (userVerified) {
+      return (
+        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300">
+          <CheckCircle2 className="w-3 h-3 mr-1" />
+          Verificato dall'utente
+        </Badge>
+      )
+    }
+    
     if (fromCache) {
       return (
         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">
@@ -109,7 +179,8 @@ export function ProductReviewItem({
   return (
     <Card className={`
       ${highlighted ? 'border-2 border-yellow-400 bg-yellow-50' : ''}
-      ${isPendingReview && !highlighted ? 'border-yellow-300' : ''}
+      ${isPendingReview && !highlighted && !userVerified ? 'border-yellow-300' : ''}
+      ${userVerified ? 'border-blue-300 bg-blue-50' : ''}
     `}>
       <CardContent className="pt-4 space-y-3">
         {/* Header con nome grezzo e confidence */}
@@ -368,15 +439,28 @@ export function ProductReviewItem({
         {editable && (
           <div className="flex gap-2 pt-2">
             {!isEditing ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsEditing(true)}
-                className="w-full"
-              >
-                <Edit2 className="w-4 h-4 mr-2" />
-                Modifica
-              </Button>
+              <div className="flex gap-2 w-full">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsEditing(true)}
+                  className="flex-1"
+                >
+                  <Edit2 className="w-4 h-4 mr-2" />
+                  Modifica
+                </Button>
+                {showConfirmButton && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleConfirmWithoutChanges}
+                    className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white opacity-90 hover:opacity-100 transition-opacity"
+                  >
+                    <CheckCircle2 className="w-4 h-4 mr-2" />
+                    Conferma senza modifiche
+                  </Button>
+                )}
+              </div>
             ) : (
               <>
                 <Button
@@ -407,15 +491,28 @@ export function ProductReviewItem({
         {!editable && (
           <div className="flex gap-2 pt-2">
             {!isEditing ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsEditing(true)}
-                className="w-full text-xs"
-              >
-                <Edit2 className="w-3 h-3 mr-2" />
-                Correggi se necessario
-              </Button>
+              <div className="flex gap-2 w-full">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsEditing(true)}
+                  className="flex-1 text-xs"
+                >
+                  <Edit2 className="w-3 h-3 mr-2" />
+                  Correggi se necessario
+                </Button>
+                {showConfirmButton && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleConfirmWithoutChanges}
+                    className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white opacity-90 hover:opacity-100 transition-opacity text-xs"
+                  >
+                    <CheckCircle2 className="w-3 h-3 mr-2" />
+                    Conferma senza modifiche
+                  </Button>
+                )}
+              </div>
             ) : (
               <>
                 <Button

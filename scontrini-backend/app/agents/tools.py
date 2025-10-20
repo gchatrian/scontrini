@@ -7,6 +7,7 @@ L'agente OpenAI può chiamare queste funzioni per:
 import json
 from typing import Dict, List, Optional
 from app.services.supabase_service import supabase_service
+from app.utils.size_parser import clean_size_field, get_unit_from_size
 
 
 # ===================================
@@ -111,13 +112,17 @@ def create_normalized_product(
                 return {"success": True, "product": similar[0], "note": "Reused existing (similar)"}
         except Exception:
             pass
+        # Processa il campo size per separare quantità e unità
+        clean_size = clean_size_field(size) if size else None
+        extracted_unit = get_unit_from_size(size) if size else unit_type
+        
         data = {
             "canonical_name": canonical_name,
             "brand": brand,
             "category": category,
             "subcategory": subcategory,
-            "size": size,
-            "unit_type": unit_type,
+            "size": clean_size,  # Solo la quantità numerica
+            "unit_type": extracted_unit or unit_type,  # Unità di misura
             "tags": tags or []
         }
         
@@ -254,11 +259,11 @@ TOOL_DEFINITIONS = [
                     },
                     "size": {
                         "type": "string",
-                        "description": "Dimensione/quantità del prodotto"
+                        "description": "Solo la quantità numerica (es. 500, 1.5, 2)"
                     },
                     "unit_type": {
                         "type": "string",
-                        "description": "Tipo di unità di misura"
+                        "description": "Unità di misura (es. g, kg, L, ml)"
                     },
                     "tags": {
                         "type": "array",

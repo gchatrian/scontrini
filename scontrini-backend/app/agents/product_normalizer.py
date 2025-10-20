@@ -18,7 +18,8 @@ class ProductNormalizerAgent:
         """Inizializza agente"""
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
-        self.temperature = 0.7
+        # Temperatura centralizzata da .env (OPENAI_TEMPERATURE)
+        self.temperature = settings.OPENAI_TEMPERATURE
         self.max_iterations = 10
     
     def normalize_product(
@@ -47,11 +48,23 @@ class ProductNormalizerAgent:
             )
             
             if existing_mapping:
-                print(f"🟢 Cache hit | canonical='{existing_mapping.get('canonical_name')}' | id={existing_mapping['normalized_product_id']}")
+                print(
+                    "🟢 Cache hit | canonical='{cn}' | id={id}".format(
+                        cn=existing_mapping.get("canonical_name"),
+                        id=existing_mapping["normalized_product_id"]
+                    )
+                )
+                # Ritorna TUTTI i dettagli del prodotto normalizzato
                 return {
                     "success": True,
                     "normalized_product_id": existing_mapping["normalized_product_id"],
                     "canonical_name": existing_mapping.get("canonical_name"),
+                    "brand": existing_mapping.get("brand"),
+                    "category": existing_mapping.get("category"),
+                    "subcategory": existing_mapping.get("subcategory"),
+                    "size": existing_mapping.get("size"),
+                    "unit_type": existing_mapping.get("unit_type"),
+                    "tags": existing_mapping.get("tags", []),
                     "created_new": False,
                     "from_cache": True,
                     "confidence": 1.0
@@ -112,7 +125,8 @@ class ProductNormalizerAgent:
                 "size": identification_result.get("size"),
                 "unit_type": identification_result.get("unit_type"),
                 "identification_notes": identification_result.get("identification_notes"),
-                "pending_review": pending_review
+                "pending_review": pending_review,
+                "user_verified": False  # Inizialmente sempre false
             }
             
             # Crea mapping raw_name → normalized_product
@@ -318,7 +332,7 @@ Istruzioni:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.1,
+                temperature=settings.OPENAI_TEMPERATURE,
                 response_format={"type": "json_object"}
             )
             content = response.choices[0].message.content.strip()
@@ -334,7 +348,9 @@ Istruzioni:
         """Controlla se esiste già mapping per questo prodotto"""
         try:
             query = supabase_service.client.table("product_mappings")\
-                .select("*, normalized_products(canonical_name)")\
+                .select(
+                    "*, normalized_products(canonical_name, brand, category, subcategory, size, unit_type, tags)"
+                )\
                 .eq("raw_name", raw_name)
             
             if store_name:
@@ -344,9 +360,16 @@ Istruzioni:
             
             if response.data:
                 mapping = response.data[0]
+                normalized = mapping.get("normalized_products", {}) or {}
                 return {
                     "normalized_product_id": mapping["normalized_product_id"],
-                    "canonical_name": mapping.get("normalized_products", {}).get("canonical_name")
+                    "canonical_name": normalized.get("canonical_name"),
+                    "brand": normalized.get("brand"),
+                    "category": normalized.get("category"),
+                    "subcategory": normalized.get("subcategory"),
+                    "size": normalized.get("size"),
+                    "unit_type": normalized.get("unit_type"),
+                    "tags": normalized.get("tags", [])
                 }
             
             return None

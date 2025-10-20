@@ -22,6 +22,9 @@ class ProcessReceiptRequest(BaseModel):
 
 class ReceiptItemData(BaseModel):
     """Dati singolo item con normalizzazione"""
+    # ID per tracking
+    receipt_item_id: Optional[str] = None
+    
     # Dati grezzi
     raw_product_name: str
     quantity: float
@@ -39,6 +42,7 @@ class ReceiptItemData(BaseModel):
     confidence: Optional[float] = None
     pending_review: Optional[bool] = False
     from_cache: Optional[bool] = False
+    user_verified: Optional[bool] = False
 
 
 class StoreData(BaseModel):

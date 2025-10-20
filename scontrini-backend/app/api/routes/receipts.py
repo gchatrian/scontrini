@@ -18,6 +18,7 @@ from app.services.ai_parser_service import ai_receipt_parser
 from app.services.parser_service import receipt_parser
 from app.services.supabase_service import supabase_service
 from app.services.store_service import store_service
+from app.utils.product_aggregator import aggregate_duplicate_products
 from typing import List, Dict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -25,6 +26,41 @@ import requests
 
 # Crea il router
 router = APIRouter()
+
+
+@router.put("/items/{item_id}/confirm", response_model=UpdateProductReviewResponse)
+async def confirm_product(item_id: str):
+    """
+    Conferma un prodotto dopo review utente.
+    Imposta user_verified=true e pending_review=false.
+    """
+    try:
+        # Aggiorna il prodotto normalizzato per indicare che è stato verificato dall'utente
+        result = supabase_service.client.table("product_mappings")\
+            .update({
+                "verified_by_user": True,
+                "requires_manual_review": False,
+                "confidence_score": 1.0
+            })\
+            .eq("id", item_id)\
+            .execute()
+        
+        if result.data:
+            return UpdateProductReviewResponse(
+                success=True,
+                message="Prodotto confermato con successo"
+            )
+        else:
+            return UpdateProductReviewResponse(
+                success=False,
+                message="Prodotto non trovato"
+            )
+            
+    except Exception as e:
+        return UpdateProductReviewResponse(
+            success=False,
+            message=f"Errore durante conferma: {str(e)}"
+        )
 
 
 @router.post("/process", response_model=ProcessReceiptResponse)
@@ -147,11 +183,22 @@ async def process_receipt(request: ProcessReceiptRequest):
             
             print("✅ Receipt aggiornato con dati parsati")
             
-            # Step 6: Salva items
+            # Step 6: Aggrega prodotti duplicati e salva items
             receipt_items_data = []
             if parsing_result.get("items"):
+                # Aggrega prodotti duplicati
+                print(f"📦 Aggregazione prodotti duplicati...")
+                original_count = len(parsing_result["items"])
+                aggregated_items = aggregate_duplicate_products(parsing_result["items"])
+                aggregated_count = len(aggregated_items)
+                
+                if original_count != aggregated_count:
+                    print(f"✅ Aggregati {original_count} → {aggregated_count} prodotti ({original_count - aggregated_count} duplicati rimossi)")
+                else:
+                    print(f"✅ Nessun duplicato trovato")
+                
                 items_to_insert = []
-                for idx, item in enumerate(parsing_result["items"]):
+                for idx, item in enumerate(aggregated_items):
                     items_to_insert.append({
                         "receipt_id": receipt_id,
                         "raw_product_name": item.get("raw_product_name", ""),
@@ -210,7 +257,7 @@ async def process_receipt(request: ProcessReceiptRequest):
                 # Processa items in parallelo (max 5 alla volta per evitare rate limits)
                 with ThreadPoolExecutor(max_workers=5) as executor:
                     futures = []
-                    for parsed_item, receipt_item in zip(parsing_result["items"], receipt_items_data):
+                    for parsed_item, receipt_item in zip(aggregated_items, receipt_items_data):
                         future = executor.submit(normalize_single_item, parsed_item, receipt_item)
                         futures.append(future)
                     
@@ -294,6 +341,7 @@ async def process_receipt(request: ProcessReceiptRequest):
                     discount_amount=parsing_result.get("discount_amount"),
                     items=[
                         ReceiptItemData(
+                            receipt_item_id=norm.get("receipt_item_id"),
                             raw_product_name=norm.get("raw_product_name", ""),
                             quantity=norm.get("quantity", 1),
                             unit_price=norm.get("total_price", 0) / norm.get("quantity", 1) if norm.get("quantity") else 0,
@@ -308,7 +356,8 @@ async def process_receipt(request: ProcessReceiptRequest):
                             unit_type=norm.get("unit_type"),
                             confidence=norm.get("confidence", 0),
                             pending_review=norm.get("pending_review", False),
-                            from_cache=norm.get("from_cache", False)
+                            from_cache=norm.get("from_cache", False),
+                            user_verified=norm.get("user_verified", False)
                         )
                         for norm in normalized_results
                     ],
