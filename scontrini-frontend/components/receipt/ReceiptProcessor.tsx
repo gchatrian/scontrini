@@ -14,12 +14,12 @@ interface ProcessingStep {
 interface ReceiptProcessorProps {
   imageUrl: string
   householdId: string
-  userId: string
+  uploadedBy: string
   onComplete: (data: any) => void
   onError: (error: string) => void
 }
 
-export function ReceiptProcessor({ imageUrl, householdId, userId, onComplete, onError }: ReceiptProcessorProps) {
+export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete, onError }: ReceiptProcessorProps) {
   const [steps, setSteps] = useState<ProcessingStep[]>([
     {
       id: 'upload',
@@ -67,7 +67,7 @@ export function ReceiptProcessor({ imageUrl, householdId, userId, onComplete, on
       console.log('Starting processing with:', {
         imageUrl,
         householdId,
-        userId
+        uploadedBy
       })
 
       // Simula step OCR
@@ -83,21 +83,21 @@ export function ReceiptProcessor({ imageUrl, householdId, userId, onComplete, on
       // Step Salvataggio
       updateStepStatus('save', 'processing')
 
-      // Chiama backend
+      // Chiama backend con URL CORRETTO
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
       
       const requestBody = {
         image_url: imageUrl,
         household_id: householdId,
-        uploaded_by: userId
+        uploaded_by: uploadedBy
       }
 
       console.log('API Request:', {
-        url: `${apiUrl}/receipts/process`,
+        url: `${apiUrl}/api/v1/receipts/process`,  // ✅ URL CORRETTO
         body: requestBody
       })
 
-      const response = await fetch(`${apiUrl}/receipts/process`, {
+      const response = await fetch(`${apiUrl}/api/v1/receipts/process`, {  // ✅ AGGIUNTO /api/v1
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +113,7 @@ export function ReceiptProcessor({ imageUrl, householdId, userId, onComplete, on
       })
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Errore durante il processing')
+        throw new Error(data.error || data.detail || 'Errore durante il processing')
       }
 
       updateStepStatus('save', 'completed')
@@ -162,57 +162,31 @@ export function ReceiptProcessor({ imageUrl, householdId, userId, onComplete, on
                 'transparent'
             }}
           >
-            {/* Icon */}
             <div className="flex-shrink-0">
-              {step.status === 'processing' ? (
-                <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-              ) : step.status === 'completed' ? (
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-              ) : step.status === 'error' ? (
-                <XCircle className="w-5 h-5 text-red-500" />
-              ) : (
-                <div className="w-5 h-5 rounded-full border-2 border-gray-300" />
+              {step.status === 'completed' && (
+                <CheckCircle2 className="w-6 h-6 text-green-600" />
               )}
-            </div>
-
-            {/* Label */}
-            <div className="flex-1">
-              <p className={`font-medium ${
-                step.status === 'completed' ? 'text-green-700' :
-                step.status === 'processing' ? 'text-blue-700' :
-                step.status === 'error' ? 'text-red-700' :
-                'text-muted-foreground'
-              }`}>
-                {step.label}
-              </p>
               {step.status === 'processing' && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  Elaborazione...
-                </p>
+                <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
               )}
               {step.status === 'error' && (
-                <p className="text-sm text-red-600 mt-1">
-                  Si è verificato un errore
-                </p>
+                <XCircle className="w-6 h-6 text-red-600" />
+              )}
+              {step.status === 'pending' && (
+                <div className="w-6 h-6 rounded-full border-2 border-gray-300" />
               )}
             </div>
-
-            {/* Step Number */}
-            <div className="flex-shrink-0 text-sm font-medium text-muted-foreground">
-              {index + 1}/{steps.length}
+            <div className="flex-1">
+              <p className="font-medium">{step.label}</p>
+              <p className="text-sm text-muted-foreground">
+                {step.status === 'completed' && 'Completato'}
+                {step.status === 'processing' && 'In corso...'}
+                {step.status === 'error' && 'Errore'}
+                {step.status === 'pending' && 'In attesa'}
+              </p>
             </div>
           </div>
         ))}
-
-        {/* Progress Bar */}
-        <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-          <div
-            className="bg-primary h-full transition-all duration-500 ease-out"
-            style={{
-              width: `${(steps.filter(s => s.status === 'completed').length / steps.length) * 100}%`
-            }}
-          />
-        </div>
       </CardContent>
     </Card>
   )

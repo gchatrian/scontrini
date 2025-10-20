@@ -8,10 +8,21 @@ import { ReceiptUploader } from '@/components/receipt/ReceiptUploader'
 import { ReceiptProcessor } from '@/components/receipt/ReceiptProcessor'
 import { ReceiptReview } from '@/components/receipt/ReceiptReview'
 import { uploadReceiptImage } from '@/lib/supabase/storage'
-import { UploadStep, ParsedReceipt, ProcessReceiptResponse } from '@/types/receipt'
 import { ChevronLeft, Upload, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
+
+type UploadStep = 'upload' | 'processing' | 'review' | 'complete'
+
+interface ProcessReceiptResponse {
+  success: boolean
+  receipt_id: string
+  message: string
+  store_name?: string
+  receipt_date?: string
+  total_amount?: number
+  items: any[]
+}
 
 export default function UploadPage() {
   const router = useRouter()
@@ -37,12 +48,6 @@ export default function UploadPage() {
       return
     }
 
-    console.log('Upload starting with:', {
-      userId: user.id,
-      householdId: household.id,
-      userEmail: user.email
-    })
-
     setSelectedFile(file)
     setUploading(true)
     setError(null)
@@ -54,8 +59,6 @@ export default function UploadPage() {
       if (!result.success) {
         throw new Error(result.error || 'Errore durante upload')
       }
-
-      console.log('Upload successful:', result.url)
 
       setImageUrl(result.url!)
       setImagePath(result.path!)
@@ -73,7 +76,6 @@ export default function UploadPage() {
 
   const handleProcessingComplete = (data: ProcessReceiptResponse) => {
     console.log('Processing completed:', data)
-    console.log('Parsed data:', data.parsed_data)
     setProcessedData(data)
     setCurrentStep('review')
   }
@@ -83,10 +85,33 @@ export default function UploadPage() {
     setCurrentStep('upload')
   }
 
-  const handleConfirm = async (editedData: ParsedReceipt) => {
+  const handleConfirm = async (modifiedData: { modified_products: any[] }) => {
     try {
-      // Qui potresti fare una chiamata API per aggiornare i dati
-      // se l'utente ha fatto modifiche
+      if (!processedData) {
+        throw new Error('No processed data')
+      }
+
+      console.log('Confirming receipt with modified products:', modifiedData)
+
+      // Chiamata POST /receipts/confirm
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/receipts/confirm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          receipt_id: processedData.receipt_id,
+          modified_products: modifiedData.modified_products
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Errore durante salvataggio')
+      }
+
+      const result = await response.json()
+      console.log('Confirm result:', result)
       
       setCurrentStep('complete')
       
@@ -121,146 +146,68 @@ export default function UploadPage() {
           </Button>
         </Link>
         
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Nuovo Scontrino</h1>
-            <p className="text-muted-foreground mt-2">
-              Carica e digitalizza il tuo scontrino
-            </p>
-          </div>
-          
-          {/* Step Indicator */}
-          <div className="hidden md:flex items-center space-x-2">
-            <StepBadge
-              label="Upload"
-              active={currentStep === 'upload'}
-              completed={['processing', 'review', 'complete'].includes(currentStep)}
-              icon={<Upload className="w-4 h-4" />}
-            />
-            <div className="w-8 h-0.5 bg-muted" />
-            <StepBadge
-              label="Processing"
-              active={currentStep === 'processing'}
-              completed={['review', 'complete'].includes(currentStep)}
-              icon={<div className="w-4 h-4 border-2 border-current rounded-full" />}
-            />
-            <div className="w-8 h-0.5 bg-muted" />
-            <StepBadge
-              label="Review"
-              active={currentStep === 'review'}
-              completed={currentStep === 'complete'}
-              icon={<div className="w-4 h-4 border-2 border-current rounded-full" />}
-            />
-            <div className="w-8 h-0.5 bg-muted" />
-            <StepBadge
-              label="Completo"
-              active={currentStep === 'complete'}
-              completed={false}
-              icon={<CheckCircle className="w-4 h-4" />}
-            />
-          </div>
-        </div>
+        <h1 className="text-3xl font-bold">Carica Scontrino</h1>
+        <p className="text-muted-foreground mt-2">
+          {currentStep === 'upload' && 'Scatta una foto o seleziona un file'}
+          {currentStep === 'processing' && 'Stiamo processando il tuo scontrino...'}
+          {currentStep === 'review' && 'Verifica i dati estratti'}
+          {currentStep === 'complete' && 'Scontrino salvato con successo!'}
+        </p>
       </div>
 
-      {/* Error Message */}
+      {/* Error Alert */}
       {error && (
-        <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          <p className="font-medium">Si è verificato un errore</p>
-          <p className="text-sm mt-1">{error}</p>
+        <div className="mb-6 p-4 bg-destructive/10 text-destructive rounded-lg">
+          <p className="font-medium">Errore</p>
+          <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Content based on Step */}
-      <div>
-        {currentStep === 'upload' && (
-          <ReceiptUploader
-            onFileSelected={handleFileSelected}
-            loading={uploading}
-          />
-        )}
+      {/* Steps */}
+      {currentStep === 'upload' && (
+        <ReceiptUploader
+          onFileSelected={handleFileSelected}
+          loading={uploading}
+        />
+      )}
 
-        {currentStep === 'processing' && imageUrl && household && user && (
-          <ReceiptProcessor
-            imageUrl={imageUrl}
-            householdId={household.id}
-            userId={user.id}
-            onComplete={handleProcessingComplete}
-            onError={handleProcessingError}
-          />
-        )}
+      {currentStep === 'processing' && (
+        <ReceiptProcessor
+          imageUrl={imageUrl}
+          householdId={household?.id || ''}
+          uploadedBy={user?.id || ''}
+          onComplete={handleProcessingComplete}
+          onError={handleProcessingError}
+        />
+      )}
 
-        {currentStep === 'review' && processedData && processedData.parsed_data && (
-          <ReceiptReview
-            parsedData={processedData.parsed_data}
-            imageUrl={imageUrl}
-            ocrConfidence={processedData.ocr_confidence}
-            onConfirm={handleConfirm}
-            onCancel={handleCancel}
-          />
-        )}
+      {currentStep === 'review' && processedData && (
+        <ReceiptReview
+          data={{
+            store_name: processedData.store_name,
+            receipt_date: processedData.receipt_date,
+            total_amount: processedData.total_amount,
+            items: processedData.items
+          }}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+      )}
 
-        {currentStep === 'review' && processedData && !processedData.parsed_data && (
-          <div className="text-center py-12">
-            <p className="text-red-600 mb-4">
-              Errore nel parsing dei dati dello scontrino.
-            </p>
-            <Button onClick={handleCancel}>
-              Riprova
-            </Button>
+      {currentStep === 'complete' && (
+        <div className="text-center py-12">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
+            <CheckCircle className="w-8 h-8 text-green-600" />
           </div>
-        )}
-
-        {currentStep === 'complete' && (
-          <div className="text-center py-12">
-            <div className="mb-6">
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto" />
-            </div>
-            <h2 className="text-2xl font-bold mb-2">Scontrino Salvato!</h2>
-            <p className="text-muted-foreground mb-6">
-              Il tuo scontrino è stato elaborato e salvato con successo.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Reindirizzamento allo storico...
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Helper Component: Step Badge
-function StepBadge({
-  label,
-  active,
-  completed,
-  icon
-}: {
-  label: string
-  active: boolean
-  completed: boolean
-  icon: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col items-center">
-      <div
-        className={`
-          w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-colors
-          ${completed ? 'bg-green-500 text-white' : ''}
-          ${active && !completed ? 'bg-primary text-white' : ''}
-          ${!active && !completed ? 'bg-muted text-muted-foreground' : ''}
-        `}
-      >
-        {icon}
-      </div>
-      <span
-        className={`
-          text-xs font-medium
-          ${active ? 'text-primary' : 'text-muted-foreground'}
-        `}
-      >
-        {label}
-      </span>
+          <h2 className="text-2xl font-bold mb-2">Scontrino Salvato!</h2>
+          <p className="text-muted-foreground mb-4">
+            Il tuo scontrino è stato processato e salvato con successo.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Verrai reindirizzato allo storico...
+          </p>
+        </div>
+      )}
     </div>
   )
 }

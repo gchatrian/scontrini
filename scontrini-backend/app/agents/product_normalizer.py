@@ -6,7 +6,7 @@ import json
 from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
 from app.config import settings
-from app.agents.prompts import SINGLE_STEP_PRODUCT_NORMALIZATION_PROMPT, PRODUCT_IDENTIFICATION_PROMPT, PRODUCT_VALIDATION_PROMPT
+from app.agents.prompts import PRODUCT_IDENTIFICATION_PROMPT, PRODUCT_VALIDATION_PROMPT
 from app.agents.tools import TOOL_DEFINITIONS, execute_function, create_product_mapping
 from app.services.supabase_service import supabase_service
 
@@ -18,8 +18,9 @@ class ProductNormalizerAgent:
         """Inizializza agente"""
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
-        # Temperatura centralizzata da .env (OPENAI_TEMPERATURE)
-        self.temperature = settings.OPENAI_TEMPERATURE
+        # Temperature specifiche per ogni fase
+        self.temperature_normalizer = settings.OPENAI_TEMPERATURE_NORMALIZER
+        self.temperature_validator = settings.OPENAI_TEMPERATURE_VALIDATOR
         self.max_iterations = 10
     
     def normalize_product(
@@ -71,7 +72,7 @@ class ProductNormalizerAgent:
                 }
             
             print("🟡 Cache miss → invoking LLM: identification → validation…")
-            # Step 1: Identificazione (senza confidenza/review)
+            # Step 1: Identificazione (usa temperature_normalizer)
             identification_result = self._identify_product(
                 raw_product_name,
                 store_name,
@@ -85,7 +86,7 @@ class ProductNormalizerAgent:
                     "error": f"Step 2 failed: {identification_result.get('error')}"
                 }
             
-            # Step 2: Validazione (confidence + pending_review)
+            # Step 2: Validazione (usa temperature_validator)
             validation_outcome = self._validate_identification(
                 raw_name=raw_product_name,
                 identified={
@@ -110,59 +111,36 @@ class ProductNormalizerAgent:
                     pr=pending_review
                 )
             )
-            # Log esplicito della confidence per audit
-            print(f"📊 Product normalization confidence: {final_confidence:.2f}")
             
-            result = {
-                "success": True,
-                "normalized_product_id": identification_result["normalized_product_id"],
-                "canonical_name": identification_result["canonical_name"],
-                "created_new": identification_result.get("created_new", False),
-                "confidence": final_confidence,
-                "brand": identification_result.get("brand"),
-                "category": identification_result.get("category"),
-                "subcategory": identification_result.get("subcategory"),
-                "size": identification_result.get("size"),
-                "unit_type": identification_result.get("unit_type"),
-                "identification_notes": identification_result.get("identification_notes"),
-                "pending_review": pending_review,
-                "user_verified": False  # Inizialmente sempre false
-            }
-            
-            # Crea mapping raw_name → normalized_product
-            mapping = create_product_mapping(
+            # Crea mapping
+            mapping_result = create_product_mapping(
                 raw_name=raw_product_name,
-                normalized_product_id=result["normalized_product_id"],
+                normalized_product_id=identification_result["normalized_product_id"],
                 store_name=store_name,
                 confidence_score=final_confidence,
                 requires_manual_review=pending_review
             )
             
-            result["mapping_id"] = mapping.get("mapping", {}).get("id")
-            if mapping.get("success"):
-                print(f"🧩 Mapping created | id={result.get('mapping_id')} | requires_manual_review={pending_review}")
-            else:
-                print(f"⚠️ Mapping not created: {mapping.get('error')}")
-
-            # Aggiorna anche lo status del prodotto normalizzato per far emergere nella view
-            try:
-                if pending_review:
-                    supabase_service.client.table("normalized_products")\
-                        .update({"verification_status": "pending_review"})\
-                        .eq("id", result["normalized_product_id"])\
-                        .execute()
-                else:
-                    # Mantieni auto_verified se non pending
-                    supabase_service.client.table("normalized_products")\
-                        .update({"verification_status": "auto_verified"})\
-                        .eq("id", result["normalized_product_id"])\
-                        .execute()
-            except Exception as e:
-                print(f"⚠️ Failed to update normalized_products.verification_status: {e}")
-            return result
+            if not mapping_result["success"]:
+                print(f"⚠️ Warning: Failed to create mapping: {mapping_result.get('error')}")
+            
+            return {
+                "success": True,
+                "normalized_product_id": identification_result["normalized_product_id"],
+                "canonical_name": identification_result.get("canonical_name"),
+                "brand": identification_result.get("brand"),
+                "category": identification_result.get("category"),
+                "subcategory": identification_result.get("subcategory"),
+                "size": identification_result.get("size"),
+                "unit_type": identification_result.get("unit_type"),
+                "tags": identification_result.get("tags", []),
+                "created_new": identification_result.get("created_new", False),
+                "from_cache": False,
+                "confidence": final_confidence,
+                "requires_manual_review": pending_review
+            }
             
         except Exception as e:
-            print(f"💥 Normalization error: {str(e)}")
             return {
                 "success": False,
                 "error": f"Normalization error: {str(e)}"
@@ -170,44 +148,39 @@ class ProductNormalizerAgent:
     
     def _identify_product(
         self,
-        raw_name: str,
-        store_name: Optional[str] = None,
-        price: Optional[float] = None
+        raw_product_name: str,
+        store_name: Optional[str],
+        price: Optional[float]
     ) -> Dict:
         """
-        Single-step: Identifica e normalizza il prodotto usando function-calling.
+        Identifica prodotto usando LLM con function calling.
+        Usa OPENAI_TEMPERATURE_NORMALIZER.
         """
-        user_message = self._create_identification_message(
-            raw_name=raw_name,
-            store_name=store_name,
-            price=price
+        user_message = self._build_user_message(
+            raw_product_name, 
+            store_name, 
+            price
         )
+        
         return self._run_identification_loop(user_message)
     
-    def _create_identification_message(
+    def _build_user_message(
         self,
         raw_name: str,
         store_name: Optional[str],
         price: Optional[float]
     ) -> str:
-        """Crea messaggio per single-step identificazione"""
-        context_parts = []
+        """Costruisce messaggio utente per LLM"""
+        message = f"RAW: '{raw_name}'"
         
         if store_name:
-            context_parts.append(f"Negozio: {store_name}")
-        
+            message += f" | STORE: '{store_name}'"
         if price:
-            context_parts.append(f"Prezzo: €{price:.2f}")
+            message += f" | PRICE: €{price:.2f}"
         
-        context_str = " | ".join(context_parts) if context_parts else "Nessun contesto aggiuntivo"
-        
-        message = f"""Identifica e normalizza questo prodotto in UN SOLO STEP:
+        message += """
 
-RAW: "{raw_name}"
-Contesto: {context_str}
-
-Istruzioni:
-- Interpreta abbreviazioni/nomi compressi presenti nel RAW.
+TASK:
 - Estrai BRAND (se presente), PRODOTTO, FORMATO.
 - Se uno tra BRAND o PRODOTTO è incerto, parti da quello più certo per vincolare la ricerca dell'altro (es. se PRODOTTO=Acqua Frizzante, limita i brand plausibili).
 - Non esiste un mapping per questo RAW: prova PRIMA a riusare un prodotto esistente (find_existing_product) e SOLO se non trovato crea un nuovo prodotto (create_normalized_product).
@@ -217,7 +190,8 @@ Istruzioni:
     
     def _run_identification_loop(self, user_message: str) -> Dict:
         """
-        Esegue loop di function calling per identificazione prodotto
+        Esegue loop di function calling per identificazione prodotto.
+        Usa OPENAI_TEMPERATURE_NORMALIZER.
         
         Returns:
             Dict con risultato identificazione
@@ -233,13 +207,13 @@ Istruzioni:
             iteration += 1
             print(f"🔁 LLM iteration #{iteration}")
             
-            # Chiama OpenAI con function tools
+            # Chiama OpenAI con function tools - USA temperature_normalizer
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
-                temperature=self.temperature
+                temperature=self.temperature_normalizer  # Temperature specifica
             )
             
             message = response.choices[0].message
@@ -320,7 +294,10 @@ Istruzioni:
         }
 
     def _validate_identification(self, raw_name: str, identified: Dict) -> Dict:
-        """Seconda chiamata LLM: valida il risultato e produce confidence/pending_review"""
+        """
+        Seconda chiamata LLM: valida il risultato e produce confidence/pending_review.
+        Usa OPENAI_TEMPERATURE_VALIDATOR.
+        """
         messages = [
             {"role": "system", "content": PRODUCT_VALIDATION_PROMPT},
             {"role": "user", "content": json.dumps({
@@ -329,10 +306,11 @@ Istruzioni:
             })}
         ]
         try:
+            # USA temperature_validator per validazione
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=settings.OPENAI_TEMPERATURE,
+                temperature=self.temperature_validator,  # Temperature specifica
                 response_format={"type": "json_object"}
             )
             content = response.choices[0].message.content.strip()
@@ -358,54 +336,28 @@ Istruzioni:
             
             response = query.execute()
             
-            if response.data:
+            if response.data and len(response.data) > 0:
                 mapping = response.data[0]
-                normalized = mapping.get("normalized_products", {}) or {}
-                return {
-                    "normalized_product_id": mapping["normalized_product_id"],
-                    "canonical_name": normalized.get("canonical_name"),
-                    "brand": normalized.get("brand"),
-                    "category": normalized.get("category"),
-                    "subcategory": normalized.get("subcategory"),
-                    "size": normalized.get("size"),
-                    "unit_type": normalized.get("unit_type"),
-                    "tags": normalized.get("tags", [])
-                }
+                normalized_product = mapping.get("normalized_products")
+                
+                if normalized_product:
+                    return {
+                        "normalized_product_id": mapping["normalized_product_id"],
+                        "canonical_name": normalized_product.get("canonical_name"),
+                        "brand": normalized_product.get("brand"),
+                        "category": normalized_product.get("category"),
+                        "subcategory": normalized_product.get("subcategory"),
+                        "size": normalized_product.get("size"),
+                        "unit_type": normalized_product.get("unit_type"),
+                        "tags": normalized_product.get("tags", [])
+                    }
             
             return None
             
-        except Exception:
+        except Exception as e:
+            print(f"Error checking existing mapping: {str(e)}")
             return None
-    
-    def normalize_products_batch(
-        self,
-        products: List[Dict],
-        store_name: Optional[str] = None
-    ) -> List[Dict]:
-        """
-        Normalizza lista di prodotti
-        
-        Args:
-            products: Lista di dict con raw_product_name, price
-            store_name: Nome negozio
-            
-        Returns:
-            Lista di risultati normalizzazione
-        """
-        results = []
-        
-        for product in products:
-            result = self.normalize_product(
-                raw_product_name=product.get("raw_product_name"),
-                store_name=store_name,
-                price=product.get("total_price")
-            )
-            
-            result["original_product"] = product
-            results.append(result)
-        
-        return results
 
 
-# Istanza globale dell'agente
+# Instanza globale
 product_normalizer_agent = ProductNormalizerAgent()

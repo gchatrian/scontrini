@@ -58,10 +58,16 @@ async def shutdown_event():
     print(f"👋 {settings.PROJECT_NAME} API shutdown")
 
 # Include routers API
-from app.api.routes import receipts
+from app.api.routes import receipts, products
 
 app.include_router(
     receipts.router, 
     prefix="/api/v1/receipts", 
     tags=["receipts"]
+)
+
+app.include_router(
+    products.router,
+    prefix="/api/v1/products",
+    tags=["products"]
 )

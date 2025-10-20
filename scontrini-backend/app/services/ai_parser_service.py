@@ -16,8 +16,8 @@ class AIReceiptParser:
         """Inizializza client OpenAI"""
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
-        # Temperatura centralizzata da .env (OPENAI_TEMPERATURE)
-        self.temperature = settings.OPENAI_TEMPERATURE
+        # Temperatura specifica per parsing (da .env: OPENAI_TEMPERATURE_PARSER)
+        self.temperature = settings.OPENAI_TEMPERATURE_PARSER
     
     def parse_receipt(self, ocr_text: str) -> Dict:
         """

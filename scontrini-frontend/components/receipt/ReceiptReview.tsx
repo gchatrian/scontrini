@@ -1,413 +1,392 @@
-// components/receipt/ReceiptReview.tsx
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { 
-  CheckCircle2, 
-  AlertCircle, 
-  Calendar,
-  Clock,
-  CreditCard,
-  Receipt as ReceiptIcon,
-  ChevronRight
-} from 'lucide-react'
-import { ParsedReceipt } from '@/types/receipt'
-import { StoreInfoCard } from './StoreInfoCard'
-import { ProductReviewItem } from './ProductReviewItem'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Check, Edit2, X, AlertCircle, Loader2 } from 'lucide-react'
+import { ParsedReceipt, ReceiptItem } from '@/types/receipt'
+import { CategoryValidationModal } from '@/components/receipt/CategoryValidationModal'
 
 interface ReceiptReviewProps {
-  parsedData: ParsedReceipt
-  imageUrl: string
-  ocrConfidence?: number
-  onConfirm: (data: ParsedReceipt) => void
+  data: ParsedReceipt
+  onConfirm: (editedData: ParsedReceipt) => void
   onCancel: () => void
+  loading?: boolean
 }
 
-export function ReceiptReview({
-  parsedData,
-  imageUrl,
-  ocrConfidence = 0,
-  onConfirm,
-  onCancel
-}: ReceiptReviewProps) {
-  const [editedData, setEditedData] = useState<ParsedReceipt>(parsedData)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+interface EditingItem {
+  index: number
+  data: ReceiptItem
+}
 
-  // Log dati iniziali
-  console.log('📊 Dati iniziali ricevuti:', {
-    totalItems: parsedData.items.length,
-    pendingReviewItems: parsedData.items.filter(item => item.pending_review).length,
-    verifiedItems: parsedData.items.filter(item => item.user_verified).length,
-    sampleItem: parsedData.items[0]
-  })
+interface PendingCategorization {
+  itemIndex: number
+  modifiedItem: ReceiptItem
+  suggestedCategory: string | null
+  suggestedSubcategory: string | null
+  loading: boolean
+}
 
-  // Conta prodotti pending review
-  const pendingReviewCount = editedData.items.filter(
-    item => item.pending_review
-  ).length
+export function ReceiptReview({ data, onConfirm, onCancel, loading = false }: ReceiptReviewProps) {
+  const [editedData, setEditedData] = useState<ParsedReceipt>(data)
+  const [editingItem, setEditingItem] = useState<EditingItem | null>(null)
+  const [pendingCategorization, setPendingCategorization] = useState<PendingCategorization | null>(null)
 
-  // Conta prodotti verificati
-  const verifiedCount = editedData.items.filter(
-    item => !item.pending_review
-  ).length
-
-  const handleStoreUpdate = (storeData: any) => {
-    // Aggiorna store nel state locale
-    setEditedData({
-      ...editedData,
-      store_name: storeData.name,
-      company_name: storeData.company_name,
-      vat_number: storeData.vat_number,
-      store_address: storeData.address_full,
-      store_data: {
-        ...editedData.store_data,
-        ...storeData
-      }
+  const handleEditItem = (index: number) => {
+    setEditingItem({
+      index,
+      data: { ...editedData.items[index] }
     })
-
-    // TODO: Implementare chiamata API per salvare store se necessario
-    console.log('Store aggiornato:', storeData)
   }
 
-  const handleProductUpdate = async (itemId: string, updates: any) => {
-    console.log('🔄 Parent riceve update per item:', itemId, updates)
-    
-    // Aggiorna item nel state locale
-    const updatedItems = editedData.items.map(item => {
-      if (item.receipt_item_id === itemId) {
-        const updatedItem = {
-          ...item,
-          ...updates,
-          pending_review: updates.user_verified ? false : item.pending_review,
-          confidence: updates.user_verified ? 1.0 : item.confidence,
-          user_verified: updates.user_verified || item.user_verified
-        }
-        console.log('✅ Item aggiornato nel parent:', updatedItem)
-        return updatedItem
-      }
-      return item
+  const handleCancelEdit = () => {
+    setEditingItem(null)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingItem) return
+
+    // Avvia processo di categorizzazione
+    setPendingCategorization({
+      itemIndex: editingItem.index,
+      modifiedItem: editingItem.data,
+      suggestedCategory: null,
+      suggestedSubcategory: null,
+      loading: true
     })
 
-    setEditedData({
-      ...editedData,
-      items: updatedItems
-    })
-
-    // Chiama API per salvare update
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      
-      // Se è una conferma utente, usa endpoint specifico
-      if (updates.user_verified) {
-        const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/confirm`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          }
+      // Chiamata LLM per categorizzazione
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/products/categorize`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          canonical_name: editingItem.data.normalized_product?.canonical_name || editingItem.data.raw_product_name,
+          brand: editingItem.data.normalized_product?.brand,
+          size: editingItem.data.normalized_product?.size,
+          unit_type: editingItem.data.normalized_product?.unit_type,
         })
+      })
 
-        if (!response.ok) {
-          throw new Error('Errore durante conferma prodotto')
-        }
-
-        const result = await response.json()
-        console.log('Prodotto confermato:', result)
-      } else {
-        // Update normale
-        const response = await fetch(`${apiUrl}/api/v1/receipts/items/${itemId}/review`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updates)
-        })
-
-        if (!response.ok) {
-          throw new Error('Errore durante aggiornamento prodotto')
-        }
-
-        const result = await response.json()
-        console.log('Prodotto aggiornato:', result)
+      if (!response.ok) {
+        throw new Error('Errore durante categorizzazione')
       }
+
+      const result = await response.json()
+
+      // Aggiorna stato con risultati categorizzazione
+      setPendingCategorization(prev => prev ? {
+        ...prev,
+        suggestedCategory: result.category,
+        suggestedSubcategory: result.subcategory,
+        loading: false
+      } : null)
+
     } catch (error) {
-      console.error('Errore update prodotto:', error)
-      // In caso di errore, potresti voler mostrare un toast/notification
+      console.error('Categorization error:', error)
+      setPendingCategorization(prev => prev ? {
+        ...prev,
+        loading: false
+      } : null)
+      alert('Errore durante la categorizzazione. Riprova.')
     }
   }
 
-  const handleConfirm = async () => {
-    if (pendingReviewCount > 0) {
-      // Mostra warning se ci sono ancora prodotti da verificare
-      const confirmed = window.confirm(
-        `Ci sono ancora ${pendingReviewCount} prodotti che richiedono verifica. Vuoi procedere comunque?`
-      )
-      if (!confirmed) return
+  const handleConfirmCategorization = (category: string, subcategory: string) => {
+    if (!pendingCategorization || !editingItem) return
+
+    // Applica modifiche con categoria validata
+    const updatedItem = {
+      ...editingItem.data,
+      normalized_product: {
+        ...editingItem.data.normalized_product!,
+        category,
+        subcategory
+      }
     }
 
-    setIsSubmitting(true)
-    onConfirm(editedData)
+    const newItems = [...editedData.items]
+    newItems[editingItem.index] = updatedItem
+
+    setEditedData({
+      ...editedData,
+      items: newItems
+    })
+
+    // Reset stati
+    setEditingItem(null)
+    setPendingCategorization(null)
   }
 
-  const confidenceBadge = ocrConfidence >= 0.8 ? (
-    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300">
-      <CheckCircle2 className="w-3 h-3 mr-1" />
-      Alta qualità ({(ocrConfidence * 100).toFixed(0)}%)
-    </Badge>
-  ) : ocrConfidence >= 0.6 ? (
-    <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-300">
-      <AlertCircle className="w-3 h-3 mr-1" />
-      Qualità media ({(ocrConfidence * 100).toFixed(0)}%)
-    </Badge>
-  ) : (
-    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">
-      <AlertCircle className="w-3 h-3 mr-1" />
-      Bassa qualità ({(ocrConfidence * 100).toFixed(0)}%)
-    </Badge>
-  )
+  const handleCancelCategorization = () => {
+    setPendingCategorization(null)
+    setEditingItem(null)
+  }
+
+  const handleItemChange = (field: keyof ReceiptItem, value: any) => {
+    if (!editingItem) return
+
+    if (field === 'raw_product_name' || field === 'quantity' || field === 'unit_price' || field === 'total_price') {
+      setEditingItem({
+        ...editingItem,
+        data: {
+          ...editingItem.data,
+          [field]: value
+        }
+      })
+    } else {
+      // Campi nested in normalized_product
+      setEditingItem({
+        ...editingItem,
+        data: {
+          ...editingItem.data,
+          normalized_product: {
+            ...editingItem.data.normalized_product!,
+            [field]: value
+          }
+        }
+      })
+    }
+  }
+
+  const handleConfirmAll = () => {
+    if (editingItem || pendingCategorization) {
+      alert('Completa la modifica in corso prima di confermare')
+      return
+    }
+
+    // Identifica solo i prodotti MODIFICATI (confronta con data originale)
+    const modifiedProducts = editedData.items
+      .filter((item, index) => {
+        const original = data.items[index]
+        if (!original) return false
+        
+        // Controlla se qualcosa è cambiato
+        return (
+          item.normalized_product?.canonical_name !== original.normalized_product?.canonical_name ||
+          item.normalized_product?.brand !== original.normalized_product?.brand ||
+          item.normalized_product?.size !== original.normalized_product?.size ||
+          item.quantity !== original.quantity ||
+          item.total_price !== original.total_price
+        )
+      })
+      .map(item => ({
+        receipt_item_id: item.id,
+        canonical_name: item.normalized_product?.canonical_name || item.raw_product_name,
+        brand: item.normalized_product?.brand,
+        size: item.normalized_product?.size,
+        unit_type: item.normalized_product?.unit_type,
+        quantity: item.quantity,
+        total_price: item.total_price
+      }))
+
+    console.log('Modified products:', modifiedProducts)
+    
+    // Chiama onConfirm con i prodotti modificati
+    onConfirm({ modified_products: modifiedProducts })
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <ReceiptIcon className="w-5 h-5" />
-              Verifica Scontrino
-            </CardTitle>
-            {confidenceBadge}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Controlla i dati estratti e verifica i prodotti contrassegnati.
-          </p>
-        </CardContent>
-      </Card>
+    <>
+      <div className="space-y-6">
+        {/* Header Info */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Verifica Scontrino</CardTitle>
+            <CardDescription>
+              Controlla i dati estratti e conferma
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm text-muted-foreground">Negozio</Label>
+                <p className="font-medium">{editedData?.store_name || 'Non riconosciuto'}</p>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Data</Label>
+                <p className="font-medium">
+                  {editedData?.receipt_date ? new Date(editedData.receipt_date).toLocaleDateString('it-IT') : 'N/A'}
+                </p>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Totale</Label>
+                <p className="font-medium text-lg">€ {editedData.total_amount?.toFixed(2)}</p>
+              </div>
+              <div>
+                <Label className="text-sm text-muted-foreground">Prodotti</Label>
+                <p className="font-medium">{editedData?.items?.length || 0}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Store Info */}
-      <StoreInfoCard
-        storeName={editedData.store_name}
-        companyName={editedData.company_name}
-        vatNumber={editedData.vat_number}
-        address={editedData.store_address}
-        storeData={editedData.store_data}
-        editable={true}
-        onUpdate={handleStoreUpdate}
-      />
-
-      {/* Receipt Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Dettagli Scontrino</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-4">
-            {/* Data */}
-            {editedData.receipt_date && (
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Data</p>
-                  <p className="text-sm font-medium">
-                    {new Date(editedData.receipt_date).toLocaleDateString('it-IT')}
-                  </p>
+        {/* Items List */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Prodotti Riconosciuti</CardTitle>
+            <CardDescription>
+              Clicca su un prodotto per modificarlo
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {(editedData?.items || []).map((item, index) => (
+                <div
+                  key={index}
+                  className={`
+                    p-4 border rounded-lg transition-all
+                    ${editingItem?.index === index ? 'border-primary bg-primary/5' : 'hover:border-muted-foreground/50'}
+                  `}
+                >
+                  {editingItem?.index === index ? (
+                    // Edit Mode
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="col-span-2">
+                          <Label>Nome Prodotto</Label>
+                          <Input
+                            value={editingItem.data.normalized_product?.canonical_name || editingItem.data.raw_product_name}
+                            onChange={(e) => handleItemChange('canonical_name', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <Label>Brand</Label>
+                          <Input
+                            value={editingItem.data.normalized_product?.brand || ''}
+                            onChange={(e) => handleItemChange('brand', e.target.value)}
+                            placeholder="Brand (opzionale)"
+                          />
+                        </div>
+                        <div>
+                          <Label>Size</Label>
+                          <Input
+                            value={editingItem.data.normalized_product?.size || ''}
+                            onChange={(e) => handleItemChange('size', e.target.value)}
+                            placeholder="es. 500ml"
+                          />
+                        </div>
+                        <div>
+                          <Label>Quantità</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={editingItem.data.quantity}
+                            onChange={(e) => handleItemChange('quantity', parseFloat(e.target.value))}
+                          />
+                        </div>
+                        <div>
+                          <Label>Prezzo Totale</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={editingItem.data.total_price}
+                            onChange={(e) => handleItemChange('total_price', parseFloat(e.target.value))}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={handleSaveEdit} size="sm" className="flex-1">
+                          <Check className="w-4 h-4 mr-2" />
+                          Salva e Categorizza
+                        </Button>
+                        <Button onClick={handleCancelEdit} variant="outline" size="sm">
+                          <X className="w-4 h-4 mr-2" />
+                          Annulla
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    // View Mode
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">
+                            {item.normalized_product?.canonical_name || item.raw_product_name}
+                          </p>
+                          {item.normalized_product?.brand && (
+                            <Badge variant="secondary">{item.normalized_product.brand}</Badge>
+                          )}
+                        </div>
+                        <div className="flex gap-4 text-sm text-muted-foreground">
+                          {item.normalized_product?.size && (
+                            <span>{item.normalized_product.size}</span>
+                          )}
+                          <span>Qty: {item.quantity}</span>
+                          <span className="font-medium text-foreground">€ {item.total_price.toFixed(2)}</span>
+                        </div>
+                        {item.product_mapping?.requires_manual_review && (
+                          <Alert className="mt-2">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertDescription className="text-xs">
+                              Questo prodotto richiede verifica manuale
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
+                      <Button
+                        onClick={() => handleEditItem(index)}
+                        variant="ghost"
+                        size="sm"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Actions */}
+        <div className="flex gap-4">
+          <Button
+            onClick={handleConfirmAll}
+            disabled={loading || !!editingItem || !!pendingCategorization}
+            className="flex-1"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Salvataggio...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4 mr-2" />
+                Conferma Tutto
+              </>
             )}
-
-            {/* Ora */}
-            {editedData.receipt_time && (
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Ora</p>
-                  <p className="text-sm font-medium">{editedData.receipt_time}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Metodo Pagamento */}
-            {editedData.payment_method && (
-              <div className="flex items-center gap-2">
-                <CreditCard className="w-4 h-4 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Pagamento</p>
-                  <p className="text-sm font-medium capitalize">{editedData.payment_method}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Totale */}
-            {editedData.total_amount !== undefined && (
-              <div className="flex items-center gap-2">
-                <ReceiptIcon className="w-4 h-4 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Totale</p>
-                  <p className="text-lg font-bold">€{editedData.total_amount.toFixed(2)}</p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Sconto */}
-          {editedData.discount_amount && editedData.discount_amount > 0 && (
-            <div className="pt-2 border-t">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Sconto applicato</span>
-                <span className="text-sm font-medium text-green-600">
-                  -€{editedData.discount_amount.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Products Section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg">
-              Prodotti ({editedData.items.length})
-            </CardTitle>
-            <div className="flex gap-2">
-              {pendingReviewCount > 0 && (
-                <Badge variant="outline" className="bg-yellow-100 text-yellow-800 border-yellow-400">
-                  <AlertCircle className="w-3 h-3 mr-1" />
-                  {pendingReviewCount} da verificare
-                </Badge>
-              )}
-              {verifiedCount > 0 && (
-                <Badge variant="outline" className="bg-green-100 text-green-800 border-green-400">
-                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                  {verifiedCount} verificati
-                </Badge>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Warning se ci sono pending review */}
-          {pendingReviewCount > 0 && (
-            <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-semibold text-yellow-900 mb-1">
-                    Verifica Richiesta
-                  </h4>
-                  <p className="text-sm text-yellow-800">
-                    Alcuni prodotti richiedono la tua verifica perché il sistema non è riuscito 
-                    a identificarli con sufficiente sicurezza. Controlla e correggi i dati se necessario. Se il riconoscimento è corretto premi su 'Conferma senza modifiche'
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Prodotti PENDING REVIEW - mostrati per primi */}
-          {editedData.items
-            .filter(item => item.pending_review)
-            .map((item, idx) => (
-              <ProductReviewItem
-                key={`pending-${idx}`}
-                item={item}
-                editable={true}
-                highlighted={true}
-                onUpdate={handleProductUpdate}
-              />
-            ))}
-
-          {/* Separator se ci sono entrambi i tipi */}
-          {pendingReviewCount > 0 && verifiedCount > 0 && (
-            <div className="flex items-center gap-4 my-6">
-              <Separator className="flex-1" />
-              <span className="text-xs text-muted-foreground uppercase tracking-wide">
-                Prodotti Verificati (editabili)
-              </span>
-              <Separator className="flex-1" />
-            </div>
-          )}
-
-          {/* Prodotti AUTO-VERIFIED - ORA EDITABILI */}
-          {editedData.items
-            .filter(item => !item.pending_review)
-            .map((item, idx) => (
-              <ProductReviewItem
-                key={`verified-${idx}`}
-                item={item}
-                editable={true}
-                highlighted={false}
-                onUpdate={handleProductUpdate}
-              />
-            ))}
-        </CardContent>
-      </Card>
-
-      {/* Summary */}
-      <Card className="bg-slate-50 border-slate-200">
-        <CardContent className="pt-6">
-          <div className="flex justify-between items-center mb-4">
-            <span className="text-lg font-semibold">Totale Scontrino</span>
-            <span className="text-2xl font-bold">
-              €{editedData.total_amount?.toFixed(2) || '0.00'}
-            </span>
-          </div>
-          
-          <div className="text-sm text-muted-foreground space-y-1">
-            <div className="flex justify-between">
-              <span>Prodotti:</span>
-              <span className="font-medium">{editedData.items.length}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Verificati:</span>
-              <span className="font-medium text-green-600">{verifiedCount}</span>
-            </div>
-            {pendingReviewCount > 0 && (
-              <div className="flex justify-between">
-                <span>Da verificare:</span>
-                <span className="font-medium text-yellow-600">{pendingReviewCount}</span>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Action Buttons */}
-      <div className="flex gap-4 pt-4 sticky bottom-0 bg-white p-4 border-t">
-        <Button
-          variant="outline"
-          onClick={onCancel}
-          disabled={isSubmitting}
-          className="flex-1"
-        >
-          Annulla
-        </Button>
-        <Button
-          onClick={handleConfirm}
-          disabled={isSubmitting}
-          className="flex-1"
-        >
-          {isSubmitting ? (
-            'Salvataggio...'
-          ) : pendingReviewCount > 0 ? (
-            <>
-              Conferma ({pendingReviewCount} avvisi)
-              <ChevronRight className="w-4 h-4 ml-2" />
-            </>
-          ) : (
-            <>
-              Conferma e Salva
-              <CheckCircle2 className="w-4 h-4 ml-2" />
-            </>
-          )}
-        </Button>
+          </Button>
+          <Button
+            onClick={onCancel}
+            variant="outline"
+            disabled={loading}
+          >
+            <X className="w-4 h-4 mr-2" />
+            Annulla
+          </Button>
+        </div>
       </div>
-    </div>
+
+      {/* Category Validation Modal */}
+      {pendingCategorization && (
+        <CategoryValidationModal
+          isOpen={true}
+          loading={pendingCategorization.loading}
+          productName={pendingCategorization.modifiedItem.normalized_product?.canonical_name || pendingCategorization.modifiedItem.raw_product_name}
+          suggestedCategory={pendingCategorization.suggestedCategory}
+          suggestedSubcategory={pendingCategorization.suggestedSubcategory}
+          onConfirm={handleConfirmCategorization}
+          onCancel={handleCancelCategorization}
+        />
+      )}
+    </>
   )
 }
