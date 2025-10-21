@@ -16,7 +16,10 @@ import {
   Package,
   Tag,
   Ruler,
-  TrendingUp
+  TrendingUp,
+  Hash,
+  DollarSign,
+  Calculator
 } from 'lucide-react'
 import { ReceiptItemWithNormalized } from '@/types/receipt'
 
@@ -209,83 +212,83 @@ export function ProductReviewItem({
 
         {/* Dati Normalizzati */}
         {!isEditing ? (
-          <div className="space-y-2">
-            {/* Nome Canonico */}
+          <div className="space-y-3">
+            {/* Nome Prodotto e Brand */}
             <div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
                 <Package className="w-3 h-3" />
-                <span className="font-medium uppercase">Prodotto Normalizzato</span>
+                <span className="font-medium uppercase">Prodotto</span>
               </div>
-              <p className="text-base font-semibold ml-5">
-                {item.canonical_name || item.raw_product_name}
-              </p>
+              <div className="ml-5 space-y-1">
+                <p className="text-base font-semibold">
+                  {item.canonical_name || 'Non identificato'}
+                </p>
+                {item.brand && (
+                  <p className="text-sm text-blue-600 font-medium">
+                    Brand: {item.brand}
+                  </p>
+                )}
+              </div>
             </div>
 
-            {/* Dettagli in griglia */}
-            <div className="grid grid-cols-2 gap-3 ml-5">
-              {/* Brand */}
-              {item.brand && (
-                <div>
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-0.5">
-                    <Tag className="w-3 h-3" />
-                    <span>Brand</span>
-                  </div>
-                  <p className="text-sm font-medium">{item.brand}</p>
+            {/* Quantità e Formato */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <Hash className="w-3 h-3" />
+                  <span className="font-medium uppercase">Quantità</span>
                 </div>
-              )}
-
-              {/* Categoria */}
-              {item.category && (
+                <p className="text-sm ml-5 font-medium">{item.quantity}</p>
+              </div>
+              {(item.size || item.unit_type) && (
                 <div>
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-0.5">
-                    <TrendingUp className="w-3 h-3" />
-                    <span>Categoria</span>
-                  </div>
-                  <p className="text-sm">{item.category}</p>
-                  {item.subcategory && (
-                    <p className="text-xs text-muted-foreground">{item.subcategory}</p>
-                  )}
-                </div>
-              )}
-
-              {/* Formato - FIX: mostra size senza duplicare unit_type */}
-              {item.size && (
-                <div>
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground mb-0.5">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
                     <Ruler className="w-3 h-3" />
-                    <span>Formato</span>
+                    <span className="font-medium uppercase">Formato</span>
                   </div>
-                  <p className="text-sm font-medium">
-                    {item.size}
-                    {item.unit_type && !item.size.includes(item.unit_type) && ` ${item.unit_type}`}
+                  <p className="text-sm ml-5 font-medium">
+                    {item.size && item.unit_type 
+                      ? `${item.size} ${item.unit_type}`
+                      : item.size || item.unit_type || 'Non specificato'
+                    }
                   </p>
                 </div>
               )}
+            </div>
 
-              {/* Quantità */}
+            {/* Prezzi */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <div className="text-xs text-muted-foreground mb-0.5">Quantità</div>
-                <p className="text-sm font-medium">
-                  {item.quantity}x
-                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <DollarSign className="w-3 h-3" />
+                  <span className="font-medium uppercase">Prezzo Unitario</span>
+                </div>
+                <p className="text-sm ml-5 font-medium">€{item.unit_price?.toFixed(2) || '0.00'}</p>
               </div>
-
-              {/* Prezzo Unitario */}
               <div>
-                <div className="text-xs text-muted-foreground mb-0.5">Prezzo Unit.</div>
-                <p className="text-sm font-medium">
-                  €{item.unit_price.toFixed(2)}
-                </p>
-              </div>
-
-              {/* Prezzo Totale */}
-              <div>
-                <div className="text-xs text-muted-foreground mb-0.5">Totale</div>
-                <p className="text-sm font-semibold">
-                  €{item.total_price.toFixed(2)}
-                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <Calculator className="w-3 h-3" />
+                  <span className="font-medium uppercase">Prezzo Totale</span>
+                </div>
+                <p className="text-sm ml-5 font-bold text-green-600">€{item.total_price?.toFixed(2) || '0.00'}</p>
               </div>
             </div>
+
+            {/* Categoria e Sottocategoria */}
+            {(item.category || item.subcategory) && (
+              <div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                  <TrendingUp className="w-3 h-3" />
+                  <span className="font-medium uppercase">Categoria</span>
+                </div>
+                <p className="text-sm ml-5">
+                  {item.category || 'Non specificata'}
+                  {item.subcategory && (
+                    <span className="text-muted-foreground"> • {item.subcategory}</span>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           // EDIT MODE

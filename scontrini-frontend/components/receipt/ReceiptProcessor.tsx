@@ -93,11 +93,11 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
       }
 
       console.log('API Request:', {
-        url: `${apiUrl}/api/v1/receipts/process`,  // ✅ URL CORRETTO
+        url: `${apiUrl}/receipts/process`,
         body: requestBody
       })
 
-      const response = await fetch(`${apiUrl}/api/v1/receipts/process`, {  // ✅ AGGIUNTO /api/v1
+      const response = await fetch(`${apiUrl}/receipts/process`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

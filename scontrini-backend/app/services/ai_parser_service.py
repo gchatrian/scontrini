@@ -110,8 +110,8 @@ REGOLE IMPORTANTI:
 - Provincia: solo sigla (es. "Milano (MI)" → "MI")
 - quantity, unit_price, total_price devono essere numeri
 - Se non trovi un dato, usa null (non stringa vuota)
-- Per i prodotti: estrai SOLO righe con nome prodotto + prezzo
-- Ignora sconti, subtotali, righe promozionali nei prodotti
+- Per i prodotti: estrai righe con nome prodotto + prezzo
+- Fai grande attenzione a righe con l'indicazione di subtotali, ad esempio "6 x 0,54" si può riferire alla riga precedente o successiva in cui viene indicato il prodotto di cui sono state acquistate 6 confezioni ad un prezzo unitario di 0.54
 - raw_product_name deve contenere il nome come appare sullo scontrino
 - Separa address_street (via + numero) da address_city"""
     

@@ -9,6 +9,15 @@ from typing import List, Optional, Dict
 
 router = APIRouter()
 
+from app.services.ocr_service import ocr_service
+from app.services.ai_parser_service import ai_receipt_parser
+from app.services.supabase_service import supabase_service
+from app.services.store_service import store_service
+from app.services.categorization_service import categorization_service
+from app.agents.product_normalizer import product_normalizer_agent
+from app.utils.product_aggregator import aggregate_duplicate_products
+from concurrent.futures import ThreadPoolExecutor
+import requests
 
 # ============================================
 # SCHEMAS
@@ -38,7 +47,16 @@ class ReceiptItemData(BaseModel):
     quantity: float
     unit_price: Optional[float]
     total_price: float
-    normalized_product: NormalizedProductData
+    # Dati normalizzati come campi diretti
+    canonical_name: Optional[str] = None
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    subcategory: Optional[str] = None
+    size: Optional[str] = None
+    unit_type: Optional[str] = None
+    confidence: Optional[float] = None
+    pending_review: Optional[bool] = None
+    user_verified: Optional[bool] = None
 
 
 class ProcessReceiptResponse(BaseModel):
@@ -109,12 +127,13 @@ async def process_receipt(request: ProcessReceiptRequest):
         # Find or Create Store
         store_id = None
         if parsing_result.get("store_name"):
-            store_result = store_service.find_or_create_store(
-                store_name=parsing_result["store_name"],
-                address=parsing_result.get("address_full"),
-                city=parsing_result.get("address_city"),
-                vat_number=parsing_result.get("vat_number")
-            )
+            store_data = {
+                "store_name": parsing_result["store_name"],
+                "address": parsing_result.get("address_full"),
+                "city": parsing_result.get("address_city"),
+                "vat_number": parsing_result.get("vat_number")
+            }
+            store_result = store_service.find_or_create_store(store_data)
             if store_result["success"]:
                 store_id = store_result["store"]["id"]
         
@@ -158,33 +177,21 @@ async def process_receipt(request: ProcessReceiptRequest):
                 print(f"⚠️ Normalization failed for '{item['raw_product_name']}': {norm_result.get('error')}")
                 return None
             
-            # Salva receipt_item
-            item_record = supabase_service.create_receipt_item(
-                receipt_id=receipt_id,
-                raw_product_name=item["raw_product_name"],
-                quantity=item.get("quantity", 1.0),
-                unit_price=item.get("unit_price"),
-                total_price=item["total_price"],
-                line_number=item.get("line_number", 0)
-            )
-            
             return {
-                "receipt_item_id": item_record["id"],
                 "raw_product_name": item["raw_product_name"],
                 "quantity": item.get("quantity", 1.0),
                 "unit_price": item.get("unit_price"),
                 "total_price": item["total_price"],
-                "normalized_product": {
-                    "normalized_product_id": norm_result["normalized_product_id"],
-                    "canonical_name": norm_result["canonical_name"],
-                    "brand": norm_result.get("brand"),
-                    "category": norm_result.get("category"),  # PRESENTE ma nascosta nel frontend
-                    "subcategory": norm_result.get("subcategory"),  # PRESENTE ma nascosta nel frontend
-                    "size": norm_result.get("size"),
-                    "unit_type": norm_result.get("unit_type"),
-                    "confidence": norm_result.get("confidence", 0.5),
-                    "requires_manual_review": norm_result.get("requires_manual_review", False)
-                }
+                # Campi normalizzati direttamente
+                "canonical_name": norm_result.get("canonical_name"),
+                "brand": norm_result.get("brand"),
+                "category": norm_result.get("category"),
+                "subcategory": norm_result.get("subcategory"),
+                "size": norm_result.get("size"),
+                "unit_type": norm_result.get("unit_type"),
+                "confidence": norm_result.get("confidence", 0.5),
+                "pending_review": norm_result.get("requires_manual_review", False),
+                "user_verified": False
             }
         
         # Normalizza tutti i prodotti in parallelo
@@ -194,22 +201,66 @@ async def process_receipt(request: ProcessReceiptRequest):
         # Filtra None (prodotti falliti)
         normalized_items = [item for item in normalized_items if item is not None]
         
+        # Crea receipt_items in batch
+        if normalized_items:
+            items_to_insert = []
+            for idx, item in enumerate(normalized_items):
+                items_to_insert.append({
+                    "receipt_id": receipt_id,
+                    "raw_product_name": item["raw_product_name"],
+                    "quantity": item["quantity"],
+                    "unit_price": item["unit_price"],
+                    "total_price": item["total_price"],
+                    "line_number": idx + 1
+                })
+            
+            receipt_items_data = supabase_service.create_receipt_items(
+                receipt_id=receipt_id,
+                items=items_to_insert
+            )
+            
+            # Aggiungi receipt_item_id ai risultati
+            for idx, item in enumerate(normalized_items):
+                if idx < len(receipt_items_data):
+                    item["receipt_item_id"] = receipt_items_data[idx]["id"]
+        
         # Aggiorna receipt status
         supabase_service.client.table("receipts")\
-            .update({"processing_status": "pending_review"})\
+            .update({"processing_status": "pending"})\
             .eq("id", receipt_id)\
             .execute()
         
         print(f"✅ Processing completato: {len(normalized_items)} prodotti normalizzati")
+        
+        # Crea ReceiptItemData con campi normalizzati
+        receipt_items = []
+        for item in normalized_items:
+            receipt_items.append(ReceiptItemData(
+                receipt_item_id=item.get("receipt_item_id", ""),
+                raw_product_name=item["raw_product_name"],
+                quantity=item["quantity"],
+                unit_price=item["unit_price"],
+                total_price=item["total_price"],
+                # Campi normalizzati (ora sono direttamente in item)
+                canonical_name=item.get("canonical_name"),
+                brand=item.get("brand"),
+                category=item.get("category"),
+                subcategory=item.get("subcategory"),
+                size=item.get("size"),
+                unit_type=item.get("unit_type"),
+                confidence=item.get("confidence"),
+                pending_review=item.get("pending_review"),
+                user_verified=item.get("user_verified")
+            ))
         
         return ProcessReceiptResponse(
             success=True,
             receipt_id=receipt_id,
             message="Scontrino processato. Verifica i dati prima di confermare.",
             store_name=parsing_result.get("store_name"),
-            receipt_date=parsing_result.get("receipt_date"),
+            receipt_date=parsing_result.get("receipt_date").isoformat() if parsing_result.get("receipt_date") else None,
             total_amount=parsing_result.get("total_amount"),
-            items=[ReceiptItemData(**item) for item in normalized_items]
+            items=receipt_items
         )
         
     except HTTPException:
@@ -256,9 +307,9 @@ async def confirm_receipt(request: ConfirmReceiptRequest):
                 print(f"⚠️ Categorization failed for {modified.canonical_name}")
                 continue
             
-            # Ottieni normalized_product_id dal receipt_item
+            # Ottieni raw_product_name dal receipt_item
             item_data = supabase_service.client.table("receipt_items")\
-                .select("*, product_mappings(normalized_product_id)")\
+                .select("raw_product_name")\
                 .eq("id", modified.receipt_item_id)\
                 .single()\
                 .execute()
@@ -266,11 +317,20 @@ async def confirm_receipt(request: ConfirmReceiptRequest):
             if not item_data.data:
                 continue
             
-            mapping = item_data.data.get("product_mappings")
-            if not mapping:
+            raw_product_name = item_data.data["raw_product_name"]
+            
+            # Cerca il mapping per questo raw_name
+            mapping_data = supabase_service.client.table("product_mappings")\
+                .select("normalized_product_id")\
+                .eq("raw_name", raw_product_name)\
+                .limit(1)\
+                .execute()
+            
+            if not mapping_data.data:
+                print(f"⚠️ No mapping found for raw_name: {raw_product_name}")
                 continue
             
-            normalized_product_id = mapping["normalized_product_id"]
+            normalized_product_id = mapping_data.data[0]["normalized_product_id"]
             
             # Aggiorna normalized_product con nuovi dati + categoria
             supabase_service.client.table("normalized_products")\
@@ -309,6 +369,7 @@ async def confirm_receipt(request: ConfirmReceiptRequest):
             supabase_service.create_purchase_history(
                 household_id=receipt["household_id"],
                 receipt_id=request.receipt_id,
+                receipt_item_id=modified.receipt_item_id,
                 normalized_product_id=normalized_product_id,
                 quantity=item["quantity"],
                 unit_price=item.get("unit_price"),

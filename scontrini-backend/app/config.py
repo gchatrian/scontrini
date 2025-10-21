@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     
     # OpenAI Temperature Settings - Configurabili per ogni tipo di chiamata LLM
     OPENAI_TEMPERATURE_PARSER: float = 0.3      # Parsing scontrini (serve precisione)
-    OPENAI_TEMPERATURE_NORMALIZER: float = 0.5  # Normalizzazione prodotti (bilanciato)
+    OPENAI_TEMPERATURE_NORMALIZER: float = 0.7  # Normalizzazione prodotti (bilanciato)
     OPENAI_TEMPERATURE_CATEGORIZER: float = 0.3 # Categorizzazione (serve consistenza)
     OPENAI_TEMPERATURE_VALIDATOR: float = 0.2   # Validazione (molto conservativo)
     

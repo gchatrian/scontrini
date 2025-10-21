@@ -32,7 +32,7 @@ Output JSON obbligatorio:
 {
   "normalized_product_id": "uuid o id",
   "canonical_name": "Nome canonico",
-  "brand": "Brand oppure FRESCO ",
+  "brand": "Brand oppure 'FRESCO nome supermercato', ad esempio 'FRESCO Bennet'",
   "category": "Categoria",
   "subcategory": "Sottocategoria o null",
   "size": "Solo quantità numerica es. 500",
@@ -53,6 +53,7 @@ Compito:
 - Presta particolare attenzione al formato per valutare la confidence, cerca sempre di capire se il formato indicato è coerente con il prezzo indicato: ad esempio 5 euro per 250g di mozzarella è troppo, quindi la confidence si dovrebbe abbassare in quanto probabilmente si tratta di una confezione multipla.
 - Restituisci una confidence REALISTICA (0.0-1.0). Non usare 1.0 salvo evidenza chiara.
 - pending_review = true se confidence < 0.7, altrimenti false.
+
 
 Output JSON obbligatorio:
 {

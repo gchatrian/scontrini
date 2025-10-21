@@ -94,7 +94,7 @@ export default function UploadPage() {
       console.log('Confirming receipt with modified products:', modifiedData)
 
       // Chiamata POST /receipts/confirm
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/receipts/confirm`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/receipts/confirm`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
