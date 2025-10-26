@@ -53,18 +53,19 @@ export interface ReceiptItemWithNormalized extends ReceiptItem {
   // ID per tracking
   id?: string
   receipt_item_id?: string
-  
+
   // Dati normalizzati
   normalized_product_id?: string
-  canonical_name?: string
+  canonical_name: string
   brand?: string | null
   subcategory?: string | null
   size?: string
   unit_type?: string
-  confidence?: number
-  pending_review?: boolean
-  from_cache?: boolean
-  user_verified?: boolean
+  confidence: number
+  confidence_level: "high" | "medium" | "low"
+  source: "cache_tier1" | "cache_tier2" | "vector_search" | "llm"
+  pending_review: boolean
+  user_verified: boolean
 }
 
 // ===================================

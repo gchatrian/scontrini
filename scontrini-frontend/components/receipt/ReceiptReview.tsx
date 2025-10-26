@@ -256,26 +256,35 @@ export function ReceiptReview({ data, onConfirm, onCancel, loading = false }: Re
                   ) : (
                     // View Mode
                     <div className="space-y-3">
-                      {/* Confidence Tag sopra il box */}
-                      {item.confidence && (
-                        <div className="flex justify-end items-center gap-2">
-                          {item.user_verified && (
-                            <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-300">
-                              Verificato dall'utente
-                            </Badge>
-                          )}
-                          <span className="text-xs text-muted-foreground">AI confidence:</span>
-                          <Badge 
-                            variant={
-                              item.confidence >= 0.8 ? "default" :
-                              item.confidence >= 0.5 ? "secondary" : "destructive"
-                            }
-                            className="text-xs"
-                          >
-                            {`${(item.confidence * 100).toFixed(0)}%`}
+                      {/* Confidence Tags sopra il box */}
+                      <div className="flex justify-end items-center gap-2">
+                        {item.user_verified && (
+                          <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-300">
+                            ✓ Verificato
                           </Badge>
-                        </div>
-                      )}
+                        )}
+
+                        {/* Source Badge */}
+                        {item.source && (
+                          <Badge variant="outline" className="text-xs">
+                            {item.source === "cache_tier1" && "✓ Cache"}
+                            {item.source === "cache_tier2" && "~ Auto"}
+                            {item.source === "vector_search" && "🔍 Search"}
+                            {item.source === "llm" && "🤖 AI"}
+                          </Badge>
+                        )}
+
+                        {/* Confidence Level Badge */}
+                        <Badge
+                          variant={
+                            item.confidence_level === "high" ? "default" :
+                            item.confidence_level === "medium" ? "secondary" : "destructive"
+                          }
+                          className="text-xs font-semibold"
+                        >
+                          {item.confidence_level.toUpperCase()}
+                        </Badge>
+                      </div>
 
                       {/* Riga originale scontrino (RAW) */}
                       <div className="bg-gray-50 p-2 rounded border-l-4 border-gray-300">

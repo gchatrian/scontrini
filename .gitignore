@@ -12,6 +12,9 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+claude.md
+.mcp.json
+.claude/
 
 # Python
 __pycache__/

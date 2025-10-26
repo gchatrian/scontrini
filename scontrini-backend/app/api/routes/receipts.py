@@ -14,9 +14,9 @@ from app.services.ai_parser_service import ai_receipt_parser
 from app.services.supabase_service import supabase_service
 from app.services.store_service import store_service
 from app.services.categorization_service import categorization_service
-from app.agents.product_normalizer import product_normalizer_agent
+from app.agents.product_normalizer_v2 import product_normalizer_v2
 from app.utils.product_aggregator import aggregate_duplicate_products
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import requests
 
 # ============================================
@@ -48,15 +48,17 @@ class ReceiptItemData(BaseModel):
     unit_price: Optional[float]
     total_price: float
     # Dati normalizzati come campi diretti
-    canonical_name: Optional[str] = None
+    canonical_name: str
     brand: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
     size: Optional[str] = None
     unit_type: Optional[str] = None
-    confidence: Optional[float] = None
-    pending_review: Optional[bool] = None
-    user_verified: Optional[bool] = None
+    confidence: float
+    confidence_level: str  # "high" | "medium" | "low"
+    source: str  # "cache_tier1" | "cache_tier2" | "vector_search" | "llm"
+    pending_review: bool
+    user_verified: bool = False
 
 
 class ProcessReceiptResponse(BaseModel):
@@ -164,39 +166,42 @@ async def process_receipt(request: ProcessReceiptRequest):
         # Aggrega prodotti duplicati
         aggregated_items = aggregate_duplicate_products(parsed_items)
         
-        def normalize_item(item):
-            """Normalizza singolo prodotto (include validazione e score)"""
-            # Normalizzazione (già include validazione interna)
-            norm_result = product_normalizer_agent.normalize_product(
+        async def normalize_item(item):
+            """Normalizza singolo prodotto con ProductNormalizerV2"""
+            norm_result = await product_normalizer_v2.normalize_product(
                 raw_product_name=item["raw_product_name"],
+                household_id=request.household_id,
                 store_name=parsing_result.get("store_name"),
                 price=item["total_price"]
             )
-            
+
             if not norm_result["success"]:
                 print(f"⚠️ Normalization failed for '{item['raw_product_name']}': {norm_result.get('error')}")
                 return None
-            
+
             return {
                 "raw_product_name": item["raw_product_name"],
                 "quantity": item.get("quantity", 1.0),
                 "unit_price": item.get("unit_price"),
                 "total_price": item["total_price"],
-                # Campi normalizzati direttamente
-                "canonical_name": norm_result.get("canonical_name"),
+                # Campi normalizzati da V2
+                "canonical_name": norm_result["canonical_name"],
                 "brand": norm_result.get("brand"),
                 "category": norm_result.get("category"),
                 "subcategory": norm_result.get("subcategory"),
                 "size": norm_result.get("size"),
                 "unit_type": norm_result.get("unit_type"),
-                "confidence": norm_result.get("confidence", 0.5),
-                "pending_review": norm_result.get("requires_manual_review", False),
+                "confidence": norm_result["confidence"],
+                "confidence_level": norm_result["confidence_level"],
+                "source": norm_result["source"],
+                "pending_review": norm_result["validation"]["flags"]["needs_review"],
                 "user_verified": False
             }
-        
-        # Normalizza tutti i prodotti in parallelo
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            normalized_items = list(executor.map(normalize_item, aggregated_items))
+
+        # Normalizza tutti i prodotti in parallelo con asyncio
+        normalized_items = await asyncio.gather(
+            *[normalize_item(item) for item in aggregated_items]
+        )
         
         # Filtra None (prodotti falliti)
         normalized_items = [item for item in normalized_items if item is not None]
@@ -232,7 +237,7 @@ async def process_receipt(request: ProcessReceiptRequest):
         
         print(f"✅ Processing completato: {len(normalized_items)} prodotti normalizzati")
         
-        # Crea ReceiptItemData con campi normalizzati
+        # Crea ReceiptItemData con campi normalizzati V2
         receipt_items = []
         for item in normalized_items:
             receipt_items.append(ReceiptItemData(
@@ -241,16 +246,18 @@ async def process_receipt(request: ProcessReceiptRequest):
                 quantity=item["quantity"],
                 unit_price=item["unit_price"],
                 total_price=item["total_price"],
-                # Campi normalizzati (ora sono direttamente in item)
-                canonical_name=item.get("canonical_name"),
+                # Campi normalizzati da V2
+                canonical_name=item["canonical_name"],
                 brand=item.get("brand"),
                 category=item.get("category"),
                 subcategory=item.get("subcategory"),
                 size=item.get("size"),
                 unit_type=item.get("unit_type"),
-                confidence=item.get("confidence"),
-                pending_review=item.get("pending_review"),
-                user_verified=item.get("user_verified")
+                confidence=item["confidence"],
+                confidence_level=item["confidence_level"],
+                source=item["source"],
+                pending_review=item["pending_review"],
+                user_verified=item["user_verified"]
             ))
         
         return ProcessReceiptResponse(
