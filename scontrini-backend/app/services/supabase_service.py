@@ -311,12 +311,17 @@ class SupabaseService:
             "receipt_item_id": receipt_item_id,
             "normalized_product_id": normalized_product_id,
             "purchase_date": purchase_date.isoformat() if isinstance(purchase_date, date) else purchase_date,
-            "store_id": store_id,
-            "quantity": quantity,
-            "unit_price": unit_price,
             "total_price": total_price
         }
-        
+
+        # Aggiungi solo campi non-None per evitare errori UUID
+        if store_id is not None:
+            data["store_id"] = store_id
+        if quantity is not None:
+            data["quantity"] = quantity
+        if unit_price is not None:
+            data["unit_price"] = unit_price
+
         response = self.client.table("purchase_history").insert(data).execute()
         return response.data[0] if response.data else None
 

@@ -14,7 +14,7 @@ from app.services.ai_parser_service import ai_receipt_parser
 from app.services.supabase_service import supabase_service
 from app.services.store_service import store_service
 from app.services.categorization_service import categorization_service
-from app.agents.product_normalizer_v2 import product_normalizer_v2
+from app.agents.product_normalizer import product_normalizer_v2
 from app.utils.product_aggregator import aggregate_duplicate_products
 import asyncio
 import requests
@@ -56,7 +56,7 @@ class ReceiptItemData(BaseModel):
     unit_type: Optional[str] = None
     confidence: float
     confidence_level: str  # "high" | "medium" | "low"
-    source: str  # "cache_tier1" | "cache_tier2" | "vector_search" | "llm"
+    source: str  # "cache_tier1" | "cache_tier2" | "sql_search" | "hypothesis_fallback"
     pending_review: bool
     user_verified: bool = False
 
@@ -101,8 +101,9 @@ class ConfirmReceiptResponse(BaseModel):
 @router.post("/process", response_model=ProcessReceiptResponse)
 async def process_receipt(request: ProcessReceiptRequest):
     """
-    Step 1-6: UPLOAD → OCR → PARSING → Normalizzazione → Validazione → Score
-    
+    Step 1-6: UPLOAD → OCR → PARSING → Normalizzazione SQL-First → Validazione → Score
+
+    Pipeline normalizzazione: Cache → LLM Interpret → SQL Search → Business Rerank → LLM Select → Validate
     Ritorna dati per review utente (con categoria/sottocategoria NASCOSTE nel frontend)
     """
     try:
@@ -158,32 +159,45 @@ async def process_receipt(request: ProcessReceiptRequest):
         )
         receipt_id = receipt["id"]
         
-        # Step 4-5-6: Normalizzazione + Validazione + Score (parallelo)
-        print("🤖 Step 4-5-6: Normalizzazione + Validazione + Score...")
-        
+        # Step 4-5-6: Normalizzazione SQL-First + Validazione + Score (batch parallelo)
+        print("🤖 Step 4-5-6: Normalizzazione SQL-First + Validazione + Score...")
+
         parsed_items = parsing_result.get("items", [])
-        
+
         # Aggrega prodotti duplicati
         aggregated_items = aggregate_duplicate_products(parsed_items)
-        
-        async def normalize_item(item):
-            """Normalizza singolo prodotto con ProductNormalizerV2"""
-            norm_result = await product_normalizer_v2.normalize_product(
-                raw_product_name=item["raw_product_name"],
-                household_id=request.household_id,
-                store_name=parsing_result.get("store_name"),
-                price=item["total_price"]
-            )
 
-            if not norm_result["success"]:
-                print(f"⚠️ Normalization failed for '{item['raw_product_name']}': {norm_result.get('error')}")
-                return None
-
-            return {
+        # Prepara batch items
+        batch_items = [
+            {
                 "raw_product_name": item["raw_product_name"],
-                "quantity": item.get("quantity", 1.0),
-                "unit_price": item.get("unit_price"),
-                "total_price": item["total_price"],
+                "store_name": parsing_result.get("store_name"),
+                "price": item["total_price"],
+                "original_item": item  # Mantieni riferimento originale
+            }
+            for item in aggregated_items
+        ]
+
+        # Normalizza batch con parallelizzazione (batch_size da config)
+        norm_results = await product_normalizer_v2.normalize_batch(
+            items=batch_items,
+            household_id=request.household_id
+        )
+
+        # Converti risultati in formato per frontend
+        normalized_items = []
+        for idx, norm_result in enumerate(norm_results):
+            if not norm_result.get("success"):
+                print(f"⚠️ Normalization failed for item {idx}: {norm_result.get('error')}")
+                continue
+
+            original_item = batch_items[idx]["original_item"]
+
+            normalized_items.append({
+                "raw_product_name": original_item["raw_product_name"],
+                "quantity": original_item.get("quantity", 1.0),
+                "unit_price": original_item.get("unit_price"),
+                "total_price": original_item["total_price"],
                 # Campi normalizzati da V2
                 "canonical_name": norm_result["canonical_name"],
                 "brand": norm_result.get("brand"),
@@ -194,17 +208,9 @@ async def process_receipt(request: ProcessReceiptRequest):
                 "confidence": norm_result["confidence"],
                 "confidence_level": norm_result["confidence_level"],
                 "source": norm_result["source"],
-                "pending_review": norm_result["validation"]["flags"]["needs_review"],
+                "pending_review": norm_result["needs_review"],
                 "user_verified": False
-            }
-
-        # Normalizza tutti i prodotti in parallelo con asyncio
-        normalized_items = await asyncio.gather(
-            *[normalize_item(item) for item in aggregated_items]
-        )
-        
-        # Filtra None (prodotti falliti)
-        normalized_items = [item for item in normalized_items if item is not None]
+            })
         
         # Crea receipt_items in batch
         if normalized_items:
@@ -285,7 +291,7 @@ async def confirm_receipt(request: ConfirmReceiptRequest):
     Flow:
     1. Riceve lista prodotti MODIFICATI dall'utente
     2. Per ogni prodotto modificato: ri-categorizza con LLM
-    3. Aggiorna normalized_products con nuove categorie
+    3. ~~Aggiorna normalized_products con nuove categorie~~ (DISABILITATO - workflow read-only)
     4. Crea purchase_history per TUTTI i prodotti
     5. Aggiorna receipt status=completed
     """
@@ -339,18 +345,19 @@ async def confirm_receipt(request: ConfirmReceiptRequest):
             
             normalized_product_id = mapping_data.data[0]["normalized_product_id"]
             
-            # Aggiorna normalized_product con nuovi dati + categoria
-            supabase_service.client.table("normalized_products")\
-                .update({
-                    "canonical_name": modified.canonical_name,
-                    "brand": modified.brand,
-                    "size": modified.size,
-                    "unit_type": modified.unit_type,
-                    "category": cat_result["category"],
-                    "subcategory": cat_result.get("subcategory")
-                })\
-                .eq("id", normalized_product_id)\
-                .execute()
+            # Aggiorna normalized_product con nuovi dati + categoria - DISABILITATO
+            # Il workflow attuale è read-only per normalized_products
+            # supabase_service.client.table("normalized_products")\
+            #     .update({
+            #         "canonical_name": modified.canonical_name,
+            #         "brand": modified.brand,
+            #         "size": modified.size,
+            #         "unit_type": modified.unit_type,
+            #         "category": cat_result["category"],
+            #         "subcategory": cat_result.get("subcategory")
+            #     })\
+            #     .eq("id", normalized_product_id)\
+            #     .execute()
             
             print(f"✅ Updated: {modified.canonical_name} → {cat_result['category']}/{cat_result.get('subcategory')}")
         

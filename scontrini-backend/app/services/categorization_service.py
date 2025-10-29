@@ -3,8 +3,9 @@ Categorization Service
 Servizio per categorizzare prodotti usando OpenAI LLM
 """
 import json
+import asyncio
 from typing import Dict, Optional
-from openai import OpenAI
+from openai import AsyncOpenAI
 from app.config import settings
 
 
@@ -12,13 +13,13 @@ class CategorizationService:
     """Servizio per categorizzazione prodotti con LLM"""
     
     def __init__(self):
-        """Inizializza client OpenAI"""
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        """Inizializza client OpenAI async"""
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.OPENAI_MODEL
         # Temperatura specifica per categorizzazione (da .env: OPENAI_TEMPERATURE_CATEGORIZER)
         self.temperature = settings.OPENAI_TEMPERATURE_CATEGORIZER
     
-    def categorize_product(
+    async def categorize_product(
         self,
         canonical_name: str,
         brand: Optional[str] = None,
@@ -50,7 +51,7 @@ class CategorizationService:
             user_prompt = f"Prodotto da categorizzare:\n{product_desc}"
             
             # Chiamata OpenAI con structured output
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},

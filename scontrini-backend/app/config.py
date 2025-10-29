@@ -39,14 +39,6 @@ class Settings(BaseSettings):
     OPENAI_TEMPERATURE_CATEGORIZER: float = 0.3 # Categorizzazione (serve consistenza)
     OPENAI_TEMPERATURE_VALIDATOR: float = 0.2   # Validazione (molto conservativo)
 
-    # OpenAI Embeddings
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-ada-002"
-    OPENAI_EMBEDDING_DIMENSIONS: int = 1536
-    OPENAI_EMBEDDING_CACHE_SIZE: int = 1000
-    OPENAI_EMBEDDING_MAX_RETRIES: int = 3
-    OPENAI_EMBEDDING_RETRY_DELAY: float = 1.0
-    OPENAI_EMBEDDING_COST_PER_1K: float = 0.0001  # $0.0001 per 1000 tokens
-
     # Cache Service
     CACHE_BASE_CONFIDENCE: float = 0.90
     CACHE_PRICE_TOLERANCE: float = 0.30  # ±30%
@@ -64,16 +56,25 @@ class Settings(BaseSettings):
     VALIDATION_HIGH_CONFIDENCE_THRESHOLD: float = 0.90
     VALIDATION_LOW_CONFIDENCE_THRESHOLD: float = 0.70
 
-    # Vector Search Service
-    VECTOR_SEARCH_MAX_RESULTS: int = 10
-    VECTOR_SEARCH_SIMILARITY_THRESHOLD: float = 0.75
-    VECTOR_SEARCH_BOOST_VERIFIED: float = 0.05  # +5% per prodotti user-verified
-    VECTOR_SEARCH_BOOST_SAME_STORE: float = 0.03  # +3% per stesso negozio
+    # SQL Retriever Settings
+    SQL_RETRIEVER_TOP_K: int = 20  # Candidati da SQL search
+    SQL_RETRIEVER_SIZE_TOLERANCE: float = 0.15  # ±15% size matching
+    SQL_RETRIEVER_FTS_THRESHOLD: float = 0.001  # Soglia minima FTS score
+    SQL_RETRIEVER_TRIGRAM_THRESHOLD: float = 0.15  # Soglia minima fuzzy score
+
+    # Business Reranker Settings
+    RERANKER_BRAND_MISMATCH_PENALTY: float = 0.20
+    RERANKER_CATEGORY_MISMATCH_PENALTY: float = 0.15
+    RERANKER_TAG_OVERLAP_BOOST: float = 0.05
+    RERANKER_SIZE_PROXIMITY_BOOST: float = 0.10
 
     # Context Service
     CONTEXT_RECENT_PURCHASES_DAYS: int = 90  # Giorni per considerare acquisti recenti
     CONTEXT_MIN_FREQUENCY_THRESHOLD: int = 3  # Min acquisti per considerare frequente
     CONTEXT_POPULAR_MIN_HOUSEHOLDS: int = 2  # Min households per considerare popolare
+
+    # Product Normalizer V2 - Parallelizzazione
+    PARALLEL_NORMALIZATION_BATCH_SIZE: int = 10  # Numero prodotti processati simultaneamente
 
     # Web Search (Optional - Task 5)
     SERPER_API_KEY: str = ""

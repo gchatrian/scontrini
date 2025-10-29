@@ -52,6 +52,7 @@ class CacheService:
             Dict con cache hit oppure None se miss
         """
         # TIER 1: Query product_cache_stats (verified by user)
+        print(f"   [CACHE] Tier 1 lookup: '{raw_name}' @ {store_name}")
         cache_result = self._query_cache_tier1(raw_name, store_name, current_price)
 
         if cache_result:
@@ -63,34 +64,56 @@ class CacheService:
                 # Price anomalo: downgrade confidence
                 confidence = max(0.70, confidence - 0.20)
 
-            return {
+            # Fetch product data
+            product_data = self._fetch_product_data(cache_result['product_id'])
+
+            result = {
                 'product_id': cache_result['product_id'],
                 'confidence': confidence,
                 'price_coherent': cache_result.get('price_coherent', True),
                 'usage_count': cache_result.get('usage_count', 0),
                 'verified_by_households': cache_result.get('verified_by_households', 0),
-                'source': 'cache_tier1',
+                'tier': 'cache_tier1',
                 'from_cache': True
             }
 
+            # Merge product data
+            if product_data:
+                result.update(product_data)
+
+            print(f"   [CACHE] ✅ Tier 1 HIT: '{result.get('canonical_name')}' (conf: {confidence:.2f}, usage: {cache_result.get('usage_count', 0)})")
+            return result
+
         # TIER 2: Fallback su auto-verified mappings (non ancora in cache stats)
+        print(f"   [CACHE] Tier 1 MISS, trying Tier 2...")
         tier2_result = self._query_cache_tier2(raw_name, store_name)
 
         if tier2_result:
             # Tier 2 ha penalty
             confidence = max(0.70, self.CACHE_BASE_CONFIDENCE - self.TIER2_PENALTY)
 
-            return {
+            # Fetch product data
+            product_data = self._fetch_product_data(tier2_result['normalized_product_id'])
+
+            result = {
                 'product_id': tier2_result['normalized_product_id'],
                 'confidence': confidence,
                 'price_coherent': True,  # No price history per Tier 2
                 'usage_count': 0,
                 'verified_by_households': 0,
-                'source': 'cache_tier2',
+                'tier': 'cache_tier2',
                 'from_cache': True
             }
 
+            # Merge product data
+            if product_data:
+                result.update(product_data)
+
+            print(f"   [CACHE] ✅ Tier 2 HIT: '{result.get('canonical_name')}' (conf: {confidence:.2f})")
+            return result
+
         # Cache miss
+        print(f"   [CACHE] ❌ MISS (both tiers)")
         return None
 
     def _query_cache_tier1(
@@ -152,6 +175,32 @@ class CacheService:
 
         except Exception as e:
             print(f"Error querying cache tier 2: {str(e)}")
+            return None
+
+    def _fetch_product_data(self, product_id: str) -> Optional[Dict]:
+        """
+        Fetch dati completi del prodotto normalizzato
+
+        Args:
+            product_id: ID del prodotto normalizzato
+
+        Returns:
+            Dict con dati del prodotto o None se non trovato
+        """
+        try:
+            response = supabase_service.client.table("normalized_products")\
+                .select("canonical_name, brand, category, subcategory, size, unit_type")\
+                .eq("id", product_id)\
+                .single()\
+                .execute()
+
+            if response.data:
+                return response.data
+
+            return None
+
+        except Exception as e:
+            print(f"Error fetching product data for {product_id}: {str(e)}")
             return None
 
     def _calculate_confidence_boost(self, cache_result: Dict) -> float:

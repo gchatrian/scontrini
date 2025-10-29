@@ -1,363 +1,308 @@
 """
-Product Normalizer Agent - Single Step
-Agente OpenAI che normalizza prodotti con un unico step LLM + function-calling
+Product Normalizer - SQL-First Pipeline
+Pipeline: Cache → LLM Interpret → SQL Search → Business Rerank → LLM Select → Validate
+Note: Vector Search RIMOSSO - usa SQL FTS + Fuzzy Matching
 """
-import json
-from typing import Dict, List, Optional, Tuple
-from openai import OpenAI
+import asyncio
+from typing import Dict, List, Optional, Any
 from app.config import settings
-from app.agents.prompts import PRODUCT_IDENTIFICATION_PROMPT, PRODUCT_VALIDATION_PROMPT
-from app.agents.tools import TOOL_DEFINITIONS, execute_function, create_product_mapping
-from app.services.supabase_service import supabase_service
+from app.services.cache_service import CacheService
+from app.services.llm_interpret_service import LLMInterpretService
+from app.services.sql_retriever_service import SQLRetrieverService
+from app.services.business_reranker_service import BusinessRerankerService
+from app.services.llm_select_service import LLMSelectService
+from app.services.llm_validate_service import LLMValidateService
 
 
-class ProductNormalizerAgent:
-    """Agente per normalizzazione prodotti con single-step LLM"""
-    
+class ProductNormalizerV2:
+    """Agente per normalizzazione prodotti - SQL-first approach"""
+
     def __init__(self):
-        """Inizializza agente"""
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = settings.OPENAI_MODEL
-        # Temperature specifiche per ogni fase
-        self.temperature_normalizer = settings.OPENAI_TEMPERATURE_NORMALIZER
-        self.temperature_validator = settings.OPENAI_TEMPERATURE_VALIDATOR
-        self.max_iterations = 10
-    
-    def normalize_product(
+        """Inizializza servizi"""
+        self.cache_service = CacheService()
+        self.llm_interpret_service = LLMInterpretService()
+        self.sql_retriever_service = SQLRetrieverService()
+        self.business_reranker_service = BusinessRerankerService()
+        self.llm_select_service = LLMSelectService()
+        self.llm_validate_service = LLMValidateService()
+
+    async def normalize_product(
         self,
         raw_product_name: str,
+        household_id: str,
         store_name: Optional[str] = None,
         price: Optional[float] = None
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         """
-        Normalizza un singolo prodotto usando un unico step LLM con function-calling.
-        
-        Args:
-            raw_product_name: Nome grezzo dallo scontrino
-            store_name: Nome negozio (per context)
-            price: Prezzo (per context)
-            
+        Normalizza singolo prodotto
+
+        Pipeline:
+        1. Cache Lookup (Tier 1 + Tier 2)
+        2. LLM Interpret (espansione abbreviazioni + estrazione dati)
+        3. SQL Hybrid Search (FTS + Fuzzy + filtri hard)
+        4. Business Reranking (regole deterministiche)
+        5. LLM Select (scelta best match)
+        6. LLM Validate (confidence scoring)
+
         Returns:
-            Dict con risultati normalizzazione
+            {
+                "success": bool,
+                "normalized_product_id": str,
+                "canonical_name": str,
+                "brand": str,
+                "category": str,
+                "confidence": float,
+                "confidence_level": "high" | "medium" | "low",
+                "source": "cache_tier1" | "cache_tier2" | "sql_search",
+                "needs_review": bool
+            }
         """
         try:
-            print(f"🔎 Normalization start | raw='{raw_product_name}' | store='{store_name}' | price={price}")
-            # Controlla se esiste già mapping per questo raw_name
-            existing_mapping = self._check_existing_mapping(
-                raw_product_name, 
-                store_name
+            print(f"🔎 [START] raw='{raw_product_name}'")
+
+            # STEP 1: Cache Lookup
+            cache_hit = self.cache_service.get_cached_product(
+                raw_name=raw_product_name,
+                store_name=store_name,
+                current_price=price
             )
-            
-            if existing_mapping:
-                print(
-                    "🟢 Cache hit | canonical='{cn}' | id={id}".format(
-                        cn=existing_mapping.get("canonical_name"),
-                        id=existing_mapping["normalized_product_id"]
-                    )
-                )
-                # Ritorna TUTTI i dettagli del prodotto normalizzato
-                return {
-                    "success": True,
-                    "normalized_product_id": existing_mapping["normalized_product_id"],
-                    "canonical_name": existing_mapping.get("canonical_name"),
-                    "brand": existing_mapping.get("brand"),
-                    "category": existing_mapping.get("category"),
-                    "subcategory": existing_mapping.get("subcategory"),
-                    "size": existing_mapping.get("size"),
-                    "unit_type": existing_mapping.get("unit_type"),
-                    "tags": existing_mapping.get("tags", []),
-                    "created_new": False,
-                    "from_cache": True,
-                    "confidence": 1.0
-                }
-            
-            print("🟡 Cache miss → invoking LLM: identification → validation…")
-            # Step 1: Identificazione (usa temperature_normalizer)
-            identification_result = self._identify_product(
-                raw_product_name,
-                store_name,
-                price
+
+            if cache_hit:
+                print(f"✅ [CACHE] {cache_hit.get('canonical_name')}")
+                return self._format_cache_result(cache_hit)
+
+            print("💭 [LLM INTERPRET]...")
+
+            # STEP 2: LLM Interpret
+            interpret_result = await self.llm_interpret_service.interpret_raw_name(
+                raw_name=raw_product_name,
+                store_name=store_name,
+                price=price
             )
-            
-            if not identification_result["success"]:
-                print(f"🔴 LLM normalization failed: {identification_result.get('error')}")
+
+            if not interpret_result['success']:
                 return {
                     "success": False,
-                    "error": f"Step 2 failed: {identification_result.get('error')}"
+                    "error": "LLM Interpret failed",
+                    "canonical_name": raw_product_name,  # Usa raw name come fallback
+                    "normalized_product_id": None,
+                    "brand": None,
+                    "category": None,
+                    "subcategory": None,
+                    "size": None,
+                    "unit_type": None,
+                    "tags": [],
+                    "confidence": 0.0,
+                    "confidence_level": "low",
+                    "source": "error",
+                    "needs_review": True
                 }
-            
-            # Step 2: Validazione (usa temperature_validator)
-            validation_outcome = self._validate_identification(
+
+            hypothesis = interpret_result['hypothesis']
+            print(f"   → hypothesis: '{hypothesis}'")
+            print(f"   → brand: {interpret_result.get('brand')}")
+            print(f"   → category: {interpret_result.get('category')}")
+            print(f"   → size: {interpret_result.get('size')} {interpret_result.get('unit_type')}")
+            print(f"   → tags: {interpret_result.get('tags', [])}")
+
+            # STEP 3: SQL Hybrid Search
+            print("🔍 [SQL SEARCH]...")
+            candidates = await asyncio.to_thread(
+                self.sql_retriever_service.search_products,
+                hypothesis=hypothesis,
+                brand=interpret_result.get('brand'),
+                category=interpret_result.get('category'),
+                size=float(interpret_result.get('size')) if interpret_result.get('size') else None,
+                unit_type=interpret_result.get('unit_type'),
+                top_k=20
+            )
+
+            if not candidates:
+                # No candidates: usa ipotesi come fallback
+                print("⚠️ [NO CANDIDATES] using hypothesis as fallback")
+                return self._format_hypothesis_fallback(interpret_result)
+
+            print(f"   → found {len(candidates)} candidates")
+            for i, c in enumerate(candidates[:3], 1):
+                print(f"      {i}. {c.get('canonical_name')} (score: {c.get('combined_score', 0):.3f})")
+
+            # STEP 4: Business Reranking
+            print("📊 [BUSINESS RERANK]...")
+            hypothesis_context = {
+                'brand': interpret_result.get('brand'),
+                'category': interpret_result.get('category'),
+                'size': interpret_result.get('size'),
+                'unit_type': interpret_result.get('unit_type'),
+                'tags': interpret_result.get('tags', [])
+            }
+            reranked = self.business_reranker_service.rerank_candidates(
+                candidates=candidates,
+                hypothesis_context=hypothesis_context
+            )
+
+            if not reranked:
+                # Tutti scartati da business rules
+                print("⚠️ [NO CANDIDATES AFTER RERANK] using hypothesis as fallback")
+                return self._format_hypothesis_fallback(interpret_result)
+
+            print(f"   → {len(reranked)} candidates survived reranking")
+            for i, c in enumerate(reranked[:3], 1):
+                print(f"      {i}. {c.get('canonical_name')} (adjusted: {c.get('combined_score', 0):.3f})")
+
+            # STEP 5: LLM Select (top 5 a LLM)
+            print("✅ [LLM SELECT]...")
+            select_result = await self.llm_select_service.select_best_match(
                 raw_name=raw_product_name,
-                identified={
-                    "canonical_name": identification_result.get("canonical_name"),
-                    "brand": identification_result.get("brand"),
-                    "category": identification_result.get("category"),
-                    "subcategory": identification_result.get("subcategory"),
-                    "size": identification_result.get("size"),
-                    "unit_type": identification_result.get("unit_type"),
-                    "notes": identification_result.get("identification_notes")
-                }
+                hypothesis=hypothesis,
+                candidates=reranked[:5]
             )
-            final_confidence = float(validation_outcome.get("confidence", 0.5))
-            pending_review = bool(validation_outcome.get("pending_review"))
-            print(
-                "✅ LLM result | canonical='{cn}' | brand='{br}' | cat='{cat}' | size='{sz}' | conf={cf:.2f} | pending_review={pr}".format(
-                    cn=identification_result.get("canonical_name"),
-                    br=identification_result.get("brand"),
-                    cat=identification_result.get("category"),
-                    sz=identification_result.get("size"),
-                    cf=final_confidence,
-                    pr=pending_review
-                )
-            )
-            
-            # Crea mapping
-            mapping_result = create_product_mapping(
+
+            if not select_result['success']:
+                # Fallback: primo candidato
+                selected_product = reranked[0]
+                print(f"   → fallback to first candidate: '{selected_product['canonical_name']}'")
+            else:
+                selected_product = select_result['selected_product']
+                print(f"   → selected: '{selected_product['canonical_name']}'")
+
+            # STEP 6: LLM Validate
+            print("📊 [LLM VALIDATE]...")
+            validation = await self.llm_validate_service.validate_mapping(
                 raw_name=raw_product_name,
-                normalized_product_id=identification_result["normalized_product_id"],
-                store_name=store_name,
-                confidence_score=final_confidence,
-                requires_manual_review=pending_review
+                selected_product=selected_product,
+                hypothesis=hypothesis
             )
-            
-            if not mapping_result["success"]:
-                print(f"⚠️ Warning: Failed to create mapping: {mapping_result.get('error')}")
-            
+
+            print(f"   → confidence: {validation['confidence_score']:.2f} ({validation['confidence_level']})")
+            print(f"✅ [DONE] '{selected_product['canonical_name']}' | confidence: {validation['confidence_score']:.2f} | review: {validation['needs_review']}\n")
+
             return {
                 "success": True,
-                "normalized_product_id": identification_result["normalized_product_id"],
-                "canonical_name": identification_result.get("canonical_name"),
-                "brand": identification_result.get("brand"),
-                "category": identification_result.get("category"),
-                "subcategory": identification_result.get("subcategory"),
-                "size": identification_result.get("size"),
-                "unit_type": identification_result.get("unit_type"),
-                "tags": identification_result.get("tags", []),
-                "created_new": identification_result.get("created_new", False),
-                "from_cache": False,
-                "confidence": final_confidence,
-                "requires_manual_review": pending_review
+                "normalized_product_id": selected_product.get('product_id'),
+                "canonical_name": selected_product['canonical_name'],
+                "brand": selected_product.get('brand'),
+                "category": selected_product.get('category'),
+                "subcategory": selected_product.get('subcategory'),
+                "size": str(selected_product.get('size')) if selected_product.get('size') is not None else None,
+                "unit_type": selected_product.get('unit_type'),
+                "tags": selected_product.get('tags', []),
+                "confidence": validation['confidence_score'],
+                "confidence_level": validation['confidence_level'],
+                "source": "sql_search",
+                "needs_review": validation['needs_review']
             }
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"Normalization error: {str(e)}"
-            }
-    
-    def _identify_product(
-        self,
-        raw_product_name: str,
-        store_name: Optional[str],
-        price: Optional[float]
-    ) -> Dict:
-        """
-        Identifica prodotto usando LLM con function calling.
-        Usa OPENAI_TEMPERATURE_NORMALIZER.
-        """
-        user_message = self._build_user_message(
-            raw_product_name, 
-            store_name, 
-            price
-        )
-        
-        return self._run_identification_loop(user_message)
-    
-    def _build_user_message(
-        self,
-        raw_name: str,
-        store_name: Optional[str],
-        price: Optional[float]
-    ) -> str:
-        """Costruisce messaggio utente per LLM"""
-        message = f"RAW: '{raw_name}'"
-        
-        if store_name:
-            message += f" | STORE: '{store_name}'"
-        if price:
-            message += f" | PRICE: €{price:.2f}"
-        
-        message += """
 
-TASK:
-- Estrai BRAND (se presente), PRODOTTO, FORMATO.
-- Se uno tra BRAND o PRODOTTO è incerto, parti da quello più certo per vincolare la ricerca dell'altro (es. se PRODOTTO=Acqua Frizzante, limita i brand plausibili).
-- Non esiste un mapping per questo RAW: prova PRIMA a riusare un prodotto esistente (find_existing_product) e SOLO se non trovato crea un nuovo prodotto (create_normalized_product).
-- Rispondi SOLO con JSON finale (niente testo extra)."""
-        
-        return message
-    
-    def _run_identification_loop(self, user_message: str) -> Dict:
-        """
-        Esegue loop di function calling per identificazione prodotto.
-        Usa OPENAI_TEMPERATURE_NORMALIZER.
-        
-        Returns:
-            Dict con risultato identificazione
-        """
-        messages = [
-            {"role": "system", "content": PRODUCT_IDENTIFICATION_PROMPT},
-            {"role": "user", "content": user_message}
-        ]
-        
-        iteration = 0
-        
-        while iteration < self.max_iterations:
-            iteration += 1
-            print(f"🔁 LLM iteration #{iteration}")
-            
-            # Chiama OpenAI con function tools - USA temperature_normalizer
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=TOOL_DEFINITIONS,
-                tool_choice="auto",
-                temperature=self.temperature_normalizer  # Temperature specifica
-            )
-            
-            message = response.choices[0].message
-            
-            # Se ha chiamato function tools
-            if message.tool_calls:
-                # Aggiungi risposta assistant ai messaggi
-                messages.append({
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        } for tc in message.tool_calls
-                    ]
-                })
-                
-                # Esegui ogni function call
-                for tool_call in message.tool_calls:
-                    function_name = tool_call.function.name
-                    arguments = json.loads(tool_call.function.arguments)
-                    print(f"  🔧 Tool call: {function_name} | args={arguments}")
-                    
-                    # Esegui funzione
-                    function_result = execute_function(function_name, arguments)
-                    print(f"  ✅ Tool result: success={function_result.get('success', False)}")
-                    
-                    # Aggiungi risultato ai messaggi
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(function_result)
-                    })
-                
-                # Continua loop - l'agent processerà i risultati
-                continue
-            
-            # Se non ha chiamato tools, ha finito
-            if message.content:
-                try:
-                    # Cerca JSON nella risposta
-                    content = message.content.strip()
-                    
-                    # Rimuovi markdown code blocks se presenti
-                    if content.startswith("```"):
-                        content = content.split("```")[1]
-                        if content.startswith("json"):
-                            content = content[4:]
-                    
-                    result = json.loads(content)
-                    print("🏁 LLM completed with final JSON response")
-                    result["success"] = True
-                    return result
-                    
-                except json.JSONDecodeError:
-                    print("⚠️ Failed to parse LLM response as JSON")
-                    return {
-                        "success": False,
-                        "error": f"Failed to parse response: {message.content}"
-                    }
-            
-            # Nessun content e nessun tool call - errore
-            print("⚠️ LLM returned neither tool_calls nor content")
+        except Exception as e:
+            print(f"🔴 [ERROR] {str(e)}")
             return {
                 "success": False,
-                "error": "Agent did not return valid response"
+                "error": f"Pipeline error: {str(e)}",
+                "canonical_name": raw_product_name,  # Usa raw name come fallback
+                "normalized_product_id": None,
+                "brand": None,
+                "category": None,
+                "subcategory": None,
+                "size": None,
+                "unit_type": None,
+                "tags": [],
+                "confidence": 0.0,
+                "confidence_level": "low",
+                "source": "error",
+                "needs_review": True
             }
-        
-        # Max iterations raggiunto
+
+    async def normalize_batch(
+        self,
+        items: List[Dict[str, Any]],
+        household_id: str,
+        batch_size: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Normalizza batch di prodotti in parallelo
+
+        Args:
+            items: Lista items con raw_product_name, store_name, price
+            household_id: ID household
+            batch_size: Numero prodotti da processare simultaneamente (default da config)
+
+        Returns:
+            Lista risultati normalizzazione (stesso ordine di input)
+        """
+        # Usa batch_size da config se non specificato
+        if batch_size is None:
+            batch_size = settings.PARALLEL_NORMALIZATION_BATCH_SIZE
+
+        print(f"🚀 [BATCH START] {len(items)} items, batch_size={batch_size}")
+
+        results = []
+
+        # Processa in batch di N items
+        for i in range(0, len(items), batch_size):
+            batch = items[i:i + batch_size]
+            print(f"   → Processing batch {i//batch_size + 1} ({len(batch)} items)...")
+
+            # Parallelizza normalizzazione del batch
+            batch_tasks = [
+                self.normalize_product(
+                    raw_product_name=item['raw_product_name'],
+                    household_id=household_id,
+                    store_name=item.get('store_name'),
+                    price=item.get('price')
+                )
+                for item in batch
+            ]
+
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+            # Gestisci errori per singolo item
+            for idx, result in enumerate(batch_results):
+                if isinstance(result, Exception):
+                    results.append({
+                        "success": False,
+                        "error": str(result)
+                    })
+                else:
+                    results.append(result)
+
+        print(f"✅ [BATCH DONE] {len(results)} items processed")
+        return results
+
+    def _format_cache_result(self, cache_hit: Dict) -> Dict[str, Any]:
+        """Formatta risultato cache in formato standard"""
         return {
-            "success": False,
-            "error": f"Max iterations ({self.max_iterations}) reached"
+            "success": True,
+            "normalized_product_id": cache_hit['product_id'],
+            "canonical_name": cache_hit.get('canonical_name'),
+            "brand": cache_hit.get('brand'),
+            "category": cache_hit.get('category'),
+            "subcategory": cache_hit.get('subcategory'),
+            "size": str(cache_hit.get('size')) if cache_hit.get('size') is not None else None,
+            "unit_type": cache_hit.get('unit_type'),
+            "tags": cache_hit.get('tags', []),
+            "confidence": cache_hit['confidence'],
+            "confidence_level": "high" if cache_hit['confidence'] >= 0.8 else "medium",
+            "source": cache_hit['tier'],
+            "needs_review": False
         }
 
-    def _validate_identification(self, raw_name: str, identified: Dict) -> Dict:
-        """
-        Seconda chiamata LLM: valida il risultato e produce confidence/pending_review.
-        Usa OPENAI_TEMPERATURE_VALIDATOR.
-        """
-        messages = [
-            {"role": "system", "content": PRODUCT_VALIDATION_PROMPT},
-            {"role": "user", "content": json.dumps({
-                "raw": raw_name,
-                "identified": identified
-            })}
-        ]
-        try:
-            # USA temperature_validator per validazione
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature_validator,  # Temperature specifica
-                response_format={"type": "json_object"}
-            )
-            content = response.choices[0].message.content.strip()
-            return json.loads(content)
-        except Exception as e:
-            return {"confidence": 0.5, "pending_review": True, "validation_notes": f"validation_error: {str(e)}"}
-    
-    def _check_existing_mapping(
-        self, 
-        raw_name: str, 
-        store_name: Optional[str]
-    ) -> Optional[Dict]:
-        """Controlla se esiste già mapping per questo prodotto"""
-        try:
-            query = supabase_service.client.table("product_mappings")\
-                .select(
-                    "*, normalized_products(canonical_name, brand, category, subcategory, size, unit_type, tags)"
-                )\
-                .eq("raw_name", raw_name)
-            
-            if store_name:
-                query = query.eq("store_name", store_name)
-            
-            response = query.execute()
-            
-            if response.data and len(response.data) > 0:
-                mapping = response.data[0]
-                normalized_product = mapping.get("normalized_products")
-                
-                if normalized_product:
-                    return {
-                        "normalized_product_id": mapping["normalized_product_id"],
-                        "canonical_name": normalized_product.get("canonical_name"),
-                        "brand": normalized_product.get("brand"),
-                        "category": normalized_product.get("category"),
-                        "subcategory": normalized_product.get("subcategory"),
-                        "size": normalized_product.get("size"),
-                        "unit_type": normalized_product.get("unit_type"),
-                        "tags": normalized_product.get("tags", [])
-                    }
-            
-            return None
-            
-        except Exception as e:
-            print(f"Error checking existing mapping: {str(e)}")
-            return None
+    def _format_hypothesis_fallback(self, interpret_result: Dict) -> Dict[str, Any]:
+        """Formatta fallback quando nessun candidato trovato"""
+        return {
+            "success": True,
+            "normalized_product_id": None,
+            "canonical_name": interpret_result['hypothesis'],
+            "brand": interpret_result.get('brand'),
+            "category": interpret_result.get('category'),
+            "subcategory": interpret_result.get('subcategory'),
+            "size": str(interpret_result.get('size')) if interpret_result.get('size') else None,
+            "unit_type": interpret_result.get('unit_type'),
+            "tags": interpret_result.get('tags', []),
+            "confidence": 0.60,
+            "confidence_level": "low",
+            "source": "hypothesis_fallback",
+            "needs_review": True
+        }
 
 
 # Instanza globale
-product_normalizer_agent = ProductNormalizerAgent()
+product_normalizer_v2 = ProductNormalizerV2()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2, CheckCircle2, XCircle, ScanLine, BrainCircuit, Database } from 'lucide-react'
 
@@ -47,9 +47,16 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
     }
   ])
 
+  // ✅ FIX: Usa useRef per tracciare se il processing è già stato eseguito
+  const hasProcessed = useRef(false)
+
   useEffect(() => {
-    processReceipt()
-  }, [imageUrl])
+    // ✅ FIX: Previeni chiamate multiple usando useRef
+    if (!hasProcessed.current && imageUrl && householdId && uploadedBy) {
+      hasProcessed.current = true
+      processReceipt()
+    }
+  }, [imageUrl, householdId, uploadedBy]) // ✅ FIX: Dipendenze corrette
 
   const updateStepStatus = (
     stepId: string,
@@ -70,20 +77,7 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
         uploadedBy
       })
 
-      // Simula step OCR
-      updateStepStatus('ocr', 'processing')
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      updateStepStatus('ocr', 'completed')
-
-      // Simula step AI Parsing
-      updateStepStatus('parsing', 'processing')
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      updateStepStatus('parsing', 'completed')
-
-      // Step Salvataggio
-      updateStepStatus('save', 'processing')
-
-      // Chiama backend con URL CORRETTO
+      // ✅ FIX: Chiama direttamente il backend senza simulazioni
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
       
       const requestBody = {
@@ -96,6 +90,11 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
         url: `${apiUrl}/receipts/process`,
         body: requestBody
       })
+
+      // ✅ FIX: Mostra step "processing" durante la chiamata API
+      updateStepStatus('ocr', 'processing')
+      updateStepStatus('parsing', 'processing')
+      updateStepStatus('save', 'processing')
 
       const response = await fetch(`${apiUrl}/receipts/process`, {
         method: 'POST',
@@ -116,6 +115,9 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
         throw new Error(data.error || data.detail || 'Errore durante il processing')
       }
 
+      // ✅ FIX: Marca tutti gli step come completati
+      updateStepStatus('ocr', 'completed')
+      updateStepStatus('parsing', 'completed')
       updateStepStatus('save', 'completed')
 
       // Attendi un attimo per mostrare completamento
@@ -126,11 +128,10 @@ export function ReceiptProcessor({ imageUrl, householdId, uploadedBy, onComplete
     } catch (error: any) {
       console.error('Processing error:', error)
       
-      // Marca step corrente come errore
-      const currentStep = steps.find(s => s.status === 'processing')
-      if (currentStep) {
-        updateStepStatus(currentStep.id, 'error')
-      }
+      // ✅ FIX: Marca tutti gli step come errore
+      updateStepStatus('ocr', 'error')
+      updateStepStatus('parsing', 'error')
+      updateStepStatus('save', 'error')
 
       onError(error.message || 'Errore durante il processing dello scontrino')
     }
